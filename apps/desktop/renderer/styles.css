@@ -19,16 +19,17 @@
 html,
 body {
   margin: 0;
-  height: 100%;
+  min-height: 100%;
   font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--text);
   background: radial-gradient(circle at 0% 0%, #f8fcff 0%, var(--bg) 45%);
+  overflow: auto;
 }
 
 .layout {
   display: grid;
-  grid-template-rows: auto auto auto auto 1fr;
-  height: 100%;
+  grid-template-rows: auto auto auto auto auto;
+  min-height: 100vh;
   padding: 14px;
   gap: 10px;
 }
@@ -224,28 +225,31 @@ body {
 }
 
 .main-grid {
-  min-height: 0;
+  min-height: auto;
   display: grid;
   grid-template-columns: 1.7fr 1fr;
   gap: 10px;
+  align-items: start;
 }
 
 .side-grid {
-  min-height: 0;
+  min-height: auto;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto;
   gap: 10px;
+  align-content: start;
 }
 
 .panel {
-  min-height: 0;
+  min-height: auto;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 12px;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto;
   gap: 10px;
+  overflow: hidden;
 }
 
 .panel-head {
@@ -262,7 +266,8 @@ body {
 
 #webAdminFrame {
   width: 100%;
-  height: 100%;
+  height: 680px;
+  min-height: 560px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #fff;
@@ -402,7 +407,7 @@ body {
 
 .log-box {
   margin: 0;
-  height: 100%;
+  height: 280px;
   overflow: auto;
   border-radius: 10px;
   background: #071a36;
@@ -419,6 +424,11 @@ body {
 
   .main-grid {
     grid-template-columns: 1fr;
+  }
+
+  #webAdminFrame {
+    height: 620px;
+    min-height: 500px;
   }
 
   .meta-row {
