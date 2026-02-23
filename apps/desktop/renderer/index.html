@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>码布斯 MEH 数字人系统</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="layout">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">MEH</div>
+        <div class="titles">
+          <h1>码布斯 MEH 数字人系统</h1>
+          <p>Desktop Runtime for LiveTalking</p>
+        </div>
+      </div>
+
+      <div class="status-grid">
+        <span id="modeChip" class="chip info">模式: local</span>
+        <span id="apiStatusChip" class="chip warn">API 未启动</span>
+        <span id="webStatusChip" class="chip warn">管理台未托管</span>
+        <span id="updateChip" class="chip info">更新: 未检查</span>
+      </div>
+
+      <div class="actions">
+        <button id="btnStartApi" class="btn">启动 API</button>
+        <button id="btnRestartApi" class="btn ghost">重启 API</button>
+        <button id="btnStopApi" class="btn danger">停止 API</button>
+        <button id="btnOpenBrowser" class="btn ghost">浏览器打开管理台</button>
+      </div>
+    </header>
+
+    <section id="noticeBar" class="notice info">系统初始化中...</section>
+
+    <section id="onboardingPanel" class="onboarding hidden">
+      <div class="onboarding-head">
+        <h2>首次启动向导</h2>
+        <p>建议按顺序完成：环境体检 -> 修复问题 -> 标记完成。</p>
+      </div>
+      <div class="onboarding-actions">
+        <button id="btnOnboardingRunChecks" class="btn">运行体检</button>
+        <button id="btnOnboardingDone" class="btn ghost">我已完成，进入系统</button>
+      </div>
+    </section>
+
+    <section class="meta-row">
+      <div><strong>Control API:</strong> <span id="apiMeta">-</span></div>
+      <div><strong>Web Admin:</strong> <span id="webMeta">-</span></div>
+      <div><strong>Python:</strong> <span id="pythonMeta">-</span></div>
+      <div><strong>Repo:</strong> <span id="repoMeta">-</span></div>
+    </section>
+
+    <main class="main-grid">
+      <section class="panel web-panel">
+        <div class="panel-head">
+          <h2>业务管理台</h2>
+          <div class="inline-actions">
+            <button id="btnRefreshFrame" class="btn ghost sm">刷新嵌入页</button>
+            <button id="btnRunChecks" class="btn ghost sm">运行体检</button>
+            <button id="btnCheckUpdates" class="btn ghost sm">检查更新</button>
+          </div>
+        </div>
+        <iframe id="webAdminFrame" title="Web Admin"></iframe>
+      </section>
+
+      <aside class="side-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>运行设置</h2>
+          </div>
+          <form id="settingsForm" class="grid-form">
+            <label>
+              运行模式
+              <select id="settingRuntimeMode">
+                <option value="local">本机模式（托管 control_api）</option>
+                <option value="cloud">云端模式（连接远程 API）</option>
+              </select>
+            </label>
+            <label>
+              远程 API（云端模式）
+              <input id="settingRemoteApiBase" placeholder="http://127.0.0.1:9001" />
+            </label>
+            <label>
+              XTTS 地址
+              <input id="settingTtsServer" placeholder="http://127.0.0.1:9000" />
+            </label>
+            <label>
+              直播端口（体检用）
+              <input id="settingLivePort" type="number" min="1" max="65535" />
+            </label>
+            <label>
+              更新通道
+              <select id="settingUpdateChannel">
+                <option value="stable">稳定版（latest）</option>
+                <option value="beta">测试版（beta）</option>
+              </select>
+            </label>
+
+            <label class="inline-switch">
+              <input id="settingAutoStartApi" type="checkbox" />
+              <span>启动桌面端时自动启动本地 API</span>
+            </label>
+            <label class="inline-switch">
+              <input id="settingAutoRestartApi" type="checkbox" />
+              <span>API 崩溃后自动重启</span>
+            </label>
+            <label class="inline-switch">
+              <input id="settingMinimizeToTray" type="checkbox" />
+              <span>关闭窗口时最小化到托盘</span>
+            </label>
+            <label class="inline-switch">
+              <input id="settingUpdatesEnabled" type="checkbox" />
+              <span>启用自动更新检查（可作为回滚开关关闭）</span>
+            </label>
+
+            <div class="inline-actions">
+              <button type="submit" class="btn">保存设置</button>
+              <button type="button" id="btnImportSettings" class="btn ghost">导入设置</button>
+              <button type="button" id="btnExportSettings" class="btn ghost">导出设置</button>
+              <button type="button" id="btnExportDiagnostics" class="btn ghost">导出诊断包</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>环境体检</h2>
+            <div class="check-summary">
+              <span id="checkOkChip" class="tag ok">OK 0</span>
+              <span id="checkWarnChip" class="tag warn">WARN 0</span>
+              <span id="checkErrorChip" class="tag bad">ERROR 0</span>
+            </div>
+          </div>
+          <div id="checkTime" class="sub-text">未检测</div>
+          <div class="check-table-wrap">
+            <table class="check-table">
+              <thead>
+                <tr>
+                  <th>检查项</th>
+                  <th>状态</th>
+                  <th>详情</th>
+                </tr>
+              </thead>
+              <tbody id="checkTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>运行日志</h2>
+            <div class="inline-actions">
+              <label class="inline-switch compact">
+                <input id="logFollowSwitch" type="checkbox" checked />
+                <span>自动刷新</span>
+              </label>
+              <button id="btnRefreshLogs" class="btn ghost sm">刷新</button>
+              <button id="btnCopyLogs" class="btn ghost sm">复制</button>
+              <button id="btnClearLogs" class="btn ghost sm">清空</button>
+            </div>
+          </div>
+          <pre id="logBox" class="log-box">初始化中...</pre>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

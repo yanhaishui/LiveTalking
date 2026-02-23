@@ -170,6 +170,29 @@ async function request(path, options = {}) {
   return data;
 }
 
+function applyExternalApiBase(apiBase, silent = true) {
+  const next = String(apiBase || "").trim();
+  if (!next || next === state.apiBase) return;
+  state.apiBase = next;
+  localStorage.setItem("controlApiBase", state.apiBase);
+  const input = byId("apiBase");
+  if (input) input.value = state.apiBase;
+  if (!silent) {
+    notify(`已切换 API 地址: ${state.apiBase}`, "info", false);
+  }
+}
+
+function setupDesktopBridge() {
+  // Electron 桌面壳通过 postMessage 下发 API 地址，保证嵌入页开箱可用。
+  window.addEventListener("message", (event) => {
+    const payload = event && typeof event.data === "object" ? event.data : null;
+    if (!payload || payload.type !== "MEH_DESKTOP_CONFIG") return;
+    const apiBase = String(payload.apiBase || "").trim();
+    if (!apiBase) return;
+    applyExternalApiBase(apiBase, true);
+  });
+}
+
 function safeText(value) {
   return String(value ?? "").replace(/[<>&]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m]));
 }
@@ -2085,6 +2108,7 @@ async function loadAllData() {
 }
 
 async function bootstrap() {
+  setupDesktopBridge();
   initNavigation();
   bindEvents();
   try {

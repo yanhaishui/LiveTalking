@@ -2,7 +2,7 @@
 
 ## 0. 文档说明
 - 目标: 将当前 LiveTalking 从命令行演示升级为可交付客户使用的本地产品。
-- 当前范围: 先完成本地 Web 管理台 + Phase 2 业务增强；`Electron` 相关工作暂缓到你最后确认后再启动。
+- 当前范围: 已完成本地 Web 管理台与 Phase 2 增强，现已启动 Electron 桌面版研发（Windows + macOS）。
 - 技术基线: `wav2lip + virtualcam` 为主链路，`webrtc/rtcpush` 作为扩展。
 - 进度标识:
   - `[ ]` 未开始
@@ -24,10 +24,10 @@
 - [ ] 统一接口错误码与错误信息结构
 - [ ] 关键功能单元测试/集成测试
 
-## P2（暂缓，需你确认后再启动）
-- [ ] Electron 封装
-- [ ] 安装器与升级机制
-- [ ] 审计/权限/导入导出
+## P2（桌面端产品化）
+- [x] Electron 桌面端封装（Windows + macOS）
+- [~] 安装器与升级机制（已接入 NSIS/DMG + autoUpdater 框架，待证书发布联调）
+- [~] 审计/权限/导入导出（已实现设置导入导出 + 诊断包导出，待权限体系）
 
 ---
 
@@ -141,15 +141,50 @@
 - [x] 多轮播计划并发策略
 - [~] 平台消息接入与优先级调度细化（待接各平台官方消息采集器）
 
-## Phase 3: 产品化（暂缓）
-- [ ] Electron 封装（等待你最后确认）
-- [ ] 安装器与自动升级
-- [ ] 审计/权限/导入导出
+## Phase 3: 产品化（进行中）
+- [x] Electron 桌面端基础工程（主进程/预加载/渲染层/本地控制 API 托管）
+- [x] Windows 打包链路（NSIS）与安装体验
+- [x] macOS 打包链路（DMG）与安装体验
+- [~] 代码签名（Windows 证书 / macOS notarization）
+- [~] 自动更新（electron-updater）与版本发布策略
+- [~] 审计/权限/导入导出
+
+---
+
+## 8. Electron 桌面版研发清单（Windows + macOS）
+
+### 8.1 架构与目录（第一阶段）
+- [x] 新增 `apps/desktop` 工程目录与基础脚手架
+- [x] 主进程能力: 窗口管理、托盘、生命周期、崩溃恢复
+- [x] 预加载桥接: 仅暴露白名单 IPC（状态/启停/日志/设置）
+- [x] 渲染层容器: 承载现有 `web_admin`，提供桌面状态条与快捷入口
+
+### 8.2 本机运行能力
+- [x] 托管 `control_api` 子进程（启动/停止/重启/状态）
+- [x] Python 解释器路径探测（mac `.venv/bin/python`、windows `.venv\\Scripts\\python.exe`）
+- [x] 本地日志采集与“导出诊断包”
+- [x] 端口占用冲突提示（9001/8010/自定义端口）
+
+### 8.3 可用性与引导
+- [x] 首次启动向导（环境检测/模型检测/XTTS连通）
+- [x] 一键修复建议（缺依赖、端口冲突、模型缺失）
+- [x] 本机模式/云端模式切换（低配机器默认云端）
+
+### 8.4 打包与发布（跨平台）
+- [x] Windows: `electron-builder + NSIS` 出 `exe`
+- [x] macOS: `electron-builder + DMG` 出安装包
+- [x] CI 打包流水线（GitHub Actions: windows-latest + macos-latest）
+- [x] 版本规范与渠道（内测/正式）
+
+### 8.5 安全与发布门槛
+- [~] Windows 代码签名（避免安装拦截）
+- [~] macOS 签名 + notarization（避免“已损坏”提示）
+- [x] 自动更新灰度策略与回滚开关
 
 ---
 
 ## 7. 今日滚动记录
-- [x] 去重并按优先级重排 TODO，明确 Electron 暂缓
+- [x] 去重并按优先级重排 TODO，明确 Electron 进入产品化阶段
 - [x] 已完成历史交付项同步为基线状态
 - [x] 完成任务失败恢复与自动重试（`jobs` 重启恢复 + 自动回退重试）
 - [x] 完成声音克隆参数化与自动试听（XTTS `tts_stream` 产出 wav）
@@ -165,3 +200,14 @@
 - [x] 系统体检模块：模型/资产/XTTS/端口可用性开播前检查
 - [x] 直播控制升级为三步开播向导（基础/声音/推流）
 - [x] 上传体验增强：文件大小与格式校验 + 实时上传进度条
+- [x] Electron 第一版骨架已落地：`main/preload/renderer` + 状态栏 + 日志面板 + 嵌入 web_admin
+- [x] Electron 主进程已托管 control_api：支持启动/停止/重启与实时状态同步
+- [x] web_admin 增加桌面桥接：支持桌面端下发 API 地址并自动应用
+- [x] Electron 主进程增强：托盘、崩溃自动恢复、端口冲突检测、设置持久化、诊断包导出
+- [x] Electron 桌面 UI 增强：首次向导、环境体检、local/cloud 模式切换、更新检查、设置导入导出
+- [x] 跨平台打包发布基线：`electron-builder` 配置 + GitHub Actions 工作流 + 发布文档
+- [x] 本机实测打包通过：`npm run dist:mac` 产出 DMG、`npm run dist:win` 产出 EXE
+- [x] 自动更新策略补齐：支持 stable/beta 通道切换 + 更新检查总开关（回滚）  
+- [x] macOS 公证自动化钩子已接入：`afterSign -> apps/desktop/scripts/notarize.js`
+- [x] 发布源企业化配置：`electron-builder.config.js` 支持 GitHub/Generic 发布源与环境变量注入
+- [x] 客户交付文档补齐：新增桌面版客户使用手册（安装/首启/日常/排障）

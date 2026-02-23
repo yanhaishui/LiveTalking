@@ -22,6 +22,7 @@ python -m http.server 9100
 ## 说明
 - 页面默认请求 `http://127.0.0.1:9001`。
 - 可在页面顶部修改并保存 API 地址。
+- 支持 Electron 桌面壳注入 API 地址（`postMessage: MEH_DESKTOP_CONFIG`）。
 - 已支持:
   - 模块化导航（首页/直播/形象/声音/脚本/轮播/预设/任务消息）
   - 系统体检页（模型文件、资产目录、XTTS 连通性、端口占用检查）

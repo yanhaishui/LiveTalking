@@ -1,0 +1,100 @@
+name: desktop-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "是否发布到 GitHub Releases"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    env:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DESKTOP_PUBLISH_PROVIDER: github
+      DESKTOP_PUBLISH_OWNER: ${{ github.repository_owner }}
+      DESKTOP_PUBLISH_REPO: ${{ github.event.repository.name }}
+      DESKTOP_PUBLISH_RELEASE_TYPE: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build macOS package
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* || "${{ github.event.inputs.publish || 'false' }}" == "true" ]]; then
+            npm run dist:mac:publish
+          else
+            npm run dist:mac
+          fi
+
+      - name: Upload mac artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos
+          path: apps/desktop/dist/**
+
+  build-win:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    env:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DESKTOP_PUBLISH_PROVIDER: github
+      DESKTOP_PUBLISH_OWNER: ${{ github.repository_owner }}
+      DESKTOP_PUBLISH_REPO: ${{ github.event.repository.name }}
+      DESKTOP_PUBLISH_RELEASE_TYPE: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Windows package
+        shell: pwsh
+        run: |
+          $isTag = "${env:GITHUB_REF}" -like "refs/tags/v*"
+          $wantPublish = "${{ github.event.inputs.publish || 'false' }}" -eq "true"
+          if ($isTag -or $wantPublish) {
+            npm run dist:win:publish
+          } else {
+            npm run dist:win
+          }
+
+      - name: Upload win artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: apps/desktop/dist/**

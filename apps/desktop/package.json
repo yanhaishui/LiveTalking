@@ -1,0 +1,30 @@
+{
+  "name": "meh-livetalking-desktop",
+  "version": "0.1.0",
+  "description": "码布斯 MEH 数字人系统桌面端",
+  "main": "main.js",
+  "author": "MEH",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lipku/LiveTalking.git"
+  },
+  "private": true,
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "pack": "electron-builder --dir -c electron-builder.config.js",
+    "dist:mac": "electron-builder --mac -c electron-builder.config.js",
+    "dist:win": "electron-builder --win -c electron-builder.config.js",
+    "dist:mac:publish": "electron-builder --mac -c electron-builder.config.js --publish always",
+    "dist:win:publish": "electron-builder --win -c electron-builder.config.js --publish always"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "@electron/notarize": "^2.5.0",
+    "electron-updater": "^6.6.2"
+  }
+}
