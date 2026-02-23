@@ -16,6 +16,12 @@ function safeText(value) {
   return String(value ?? "").replace(/[<>&]/g, (m) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[m]));
 }
 
+function shortText(value, maxLen = 24) {
+  const text = String(value || "");
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen - 1)}…`;
+}
+
 function normalizeStatusClass(status) {
   const text = String(status || "").toLowerCase();
   if (text === "ok") return "ok";
@@ -139,7 +145,10 @@ function renderStatus() {
 
   const updaterStatus = status.updater?.status || "idle";
   const updaterType = updaterStatus === "error" ? "error" : updaterStatus === "available" ? "warn" : "info";
-  setChip("updateChip", `更新: ${status.updater?.message || "未检查"}`, updaterType);
+  const updateText = status.updater?.configured
+    ? shortText(status.updater?.message || "未检查", 26)
+    : "未配置更新源";
+  setChip("updateChip", `更新: ${updateText}`, updaterType);
 
   byId("apiMeta").textContent = `${status.api?.effectiveUrl || "-"} | pid=${status.api?.pid || 0}`;
   const webSource = status.webAdmin?.source ? ` (${status.webAdmin.source})` : "";

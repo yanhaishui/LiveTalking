@@ -67,6 +67,8 @@ const state = {
     status: "idle",
     message: autoUpdater ? "未检查更新" : "未安装 electron-updater",
     lastCheckAt: "",
+    configured: false,
+    source: "",
   },
   checks: {
     time: "",
@@ -227,6 +229,90 @@ function loadSettings() {
 function saveSettings() {
   ensureParentDir(state.settingsPath);
   fs.writeFileSync(state.settingsPath, JSON.stringify(state.settings, null, 2), "utf8");
+}
+
+function readUpdaterConfigFromFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    const text = fs.readFileSync(filePath, "utf8");
+    const result = {};
+    text.split(/\r?\n/).forEach((line) => {
+      const m = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*):\s*(.+)\s*$/);
+      if (!m) return;
+      if (line.startsWith("  -")) return;
+      result[m[1]] = m[2].replace(/^['"]|['"]$/g, "");
+    });
+    return result;
+  } catch (_) {
+    return null;
+  }
+}
+
+function resolveUpdaterSource() {
+  const configPath = path.join(process.resourcesPath || "", "app-update.yml");
+  const cfg = readUpdaterConfigFromFile(configPath);
+  if (!cfg || !cfg.provider) {
+    return {
+      configured: false,
+      source: "",
+      summary: "未配置更新源",
+      path: configPath,
+    };
+  }
+
+  if (cfg.provider === "github") {
+    const owner = String(cfg.owner || "").trim();
+    const repo = String(cfg.repo || "").trim();
+    return {
+      configured: Boolean(owner && repo),
+      source: `github:${owner}/${repo}`,
+      summary: owner && repo ? `${owner}/${repo}` : "GitHub（配置不完整）",
+      path: configPath,
+    };
+  }
+
+  if (cfg.provider === "generic") {
+    const url = String(cfg.url || "").trim();
+    return {
+      configured: Boolean(url),
+      source: `generic:${url}`,
+      summary: url ? url : "Generic（配置不完整）",
+      path: configPath,
+    };
+  }
+
+  return {
+    configured: true,
+    source: String(cfg.provider),
+    summary: String(cfg.provider),
+    path: configPath,
+  };
+}
+
+function refreshUpdaterConfigState() {
+  const info = resolveUpdaterSource();
+  state.updater.configured = info.configured;
+  state.updater.source = info.source;
+  if (!info.configured) {
+    state.updater.status = "idle";
+    state.updater.message = "未配置更新源";
+  } else if (!state.updater.lastCheckAt) {
+    state.updater.message = `更新源: ${info.summary}`;
+  }
+}
+
+function simplifyUpdateErrorMessage(err) {
+  const raw = String(err?.message || err || "未知错误");
+  if (/Cannot find latest.*yml/i.test(raw) || /404/.test(raw)) {
+    return "更新源可访问，但未发布 latest 更新文件";
+  }
+  if (/401|403|authentication|auth/i.test(raw)) {
+    return "更新源鉴权失败，请检查仓库权限";
+  }
+  if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|network|timeout|socket/i.test(raw)) {
+    return "更新服务器不可达，请检查网络后重试";
+  }
+  return raw.split("\n")[0].slice(0, 180);
 }
 
 async function restartWebAdminServer() {
@@ -967,6 +1053,7 @@ function createTray() {
 
 function setupAutoUpdater() {
   if (!autoUpdater) return;
+  refreshUpdaterConfigState();
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -997,8 +1084,9 @@ function setupAutoUpdater() {
 
   autoUpdater.on("error", (err) => {
     state.updater.status = "error";
-    state.updater.message = `更新检查失败: ${err.message}`;
-    pushLog("WARN", state.updater.message);
+    const msg = simplifyUpdateErrorMessage(err);
+    state.updater.message = `更新检查失败: ${msg}`;
+    pushLog("WARN", `${state.updater.message}; raw=${String(err?.message || err || "")}`);
     broadcastStatus();
   });
 }
@@ -1016,6 +1104,13 @@ async function checkForUpdates() {
       message: "已禁用自动更新检查（可在设置中重新开启）",
     };
   }
+  refreshUpdaterConfigState();
+  if (!state.updater.configured) {
+    return {
+      ok: false,
+      message: "未配置更新源，请先发布桌面版本或配置 publish",
+    };
+  }
 
   try {
     await autoUpdater.checkForUpdates();
@@ -1024,9 +1119,10 @@ async function checkForUpdates() {
       message: "已触发更新检查，请查看状态栏",
     };
   } catch (err) {
+    const msg = simplifyUpdateErrorMessage(err);
     return {
       ok: false,
-      message: `更新检查失败: ${err.message}`,
+      message: `更新检查失败: ${msg}`,
     };
   }
 }

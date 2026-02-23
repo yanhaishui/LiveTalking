@@ -54,6 +54,11 @@ GH_TOKEN=<token> \
 npm run dist:mac:publish
 ```
 
+如果你不希望生成更新源配置（仅离线安装包）：
+```bash
+DESKTOP_PUBLISH_PROVIDER=off npm run dist:mac
+```
+
 灰度策略建议：
 - `stable` 通道给正式用户。
 - `beta` 通道给内测用户。

@@ -55,6 +55,10 @@ npm run dist:mac:publish
 - `DESKTOP_PUBLISH_RELEASE_TYPE=release|prerelease|draft`
 - `DESKTOP_PUBLISH_URL`（generic 模式）
 
+说明：
+- 默认会按 `yanhaishui/LiveTalking` 作为 GitHub 更新源生成 `app-update.yml`。
+- 若你要禁用更新源并仅本地打包，可设置 `DESKTOP_PUBLISH_PROVIDER=off`。
+
 ## 自动更新说明
 - 已接入 `electron-updater`。
 - 默认未强绑定发布源，避免本地打包失败。

@@ -13,8 +13,8 @@ function parseOwnerRepo() {
 }
 
 function resolvePublish() {
-  const provider = String(process.env.DESKTOP_PUBLISH_PROVIDER || "").trim().toLowerCase();
-  if (!provider) return undefined;
+  const provider = String(process.env.DESKTOP_PUBLISH_PROVIDER || "github").trim().toLowerCase();
+  if (provider === "none" || provider === "off" || provider === "disable") return undefined;
 
   if (provider === "github") {
     const { owner, repo } = parseOwnerRepo();
