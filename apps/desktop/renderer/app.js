@@ -155,6 +155,7 @@ function renderStatus() {
   byId("webMeta").textContent = `${status.webAdmin?.url || "-"}${webSource}`;
   byId("pythonMeta").textContent = status.api?.pythonPath || "-";
   byId("repoMeta").textContent = status.repoRoot || "-";
+  byId("desktopMeta").textContent = `v${status.appVersion || "-"}`;
 
   const frame = byId("webAdminFrame");
   const nextUrl = status.webAdmin?.url ? `${status.webAdmin.url}/` : "";

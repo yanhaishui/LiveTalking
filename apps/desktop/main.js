@@ -106,6 +106,7 @@ function getStatus() {
   applyEffectiveApiBase();
   return {
     appTitle: APP_TITLE,
+    appVersion: app.getVersion(),
     platform: process.platform,
     repoRoot: state.repoRoot,
     webAdmin: { ...state.webAdmin },
