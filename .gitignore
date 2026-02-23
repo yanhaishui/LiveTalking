@@ -1,21 +1,180 @@
+# Python
 __pycache__/
-build/
-*.egg-info/
+*.py[cod]
+*$py.class
 *.so
-*.mp4
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-tmp*
-trial*/
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
 
-data
+# PyCharm / IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+out/
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Models - Large files (keep the directory structure but ignore model files)
+models/
+pretrained/
+# But keep the placeholder file
+!models/put models here.txt
+
+# Data files (keep config but ignore generated data)
+data/
 data_utils/face_tracking/3DMM/*
 data_utils/face_parsing/79999_iter.pth
+# But keep the config file
+!data/custom_config.json
 
-pretrained
+# Results and outputs
+results/
+outputs/
+wav2lip/results/
+workspace/
+trial*/
+tmp*
 *.mp4
-.DS_Store
-workspace/log_ngp.txt
-.idea
-models/
+*.avi
+*.mov
+
+# Logs
 *.log
-dist
+logs/
+log/
+workspace/log_ngp.txt
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Testing
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.cache
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.cache
+*~
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Docker volumes and runtime
+docker-compose.override.yml
+.dockerignore
+
+# Node modules (if any web dependencies)
+node_modules/
+
+# Audio/Video files (large media files)
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.webm
+
+# Image files (except small assets)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+# But keep assets
+!assets/**/*.jpg
+!assets/**/*.jpeg
+!assets/**/*.png
+!assets/**/*.gif
+
+# Weights and checkpoints
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.pt
+*.h5
+*.pb
+*.onnx
+*.tflite
+*.pkl
+*.pickle
+# But keep s3fd and wav2lip model references (if they're small or placeholders)
+!models/s3fd.pth
+!models/wav2lip.pth
+
+# Custom data directories
+custom_data/
+user_data/
+avatars_generated/
