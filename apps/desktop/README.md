@@ -4,6 +4,7 @@
 
 ## 第一阶段已实现
 - 主进程托管 `python -m apps.control_api`
+- 支持在 UI 中选择 LiveTalking 项目目录（修复安装版默认路径不正确问题）
 - Local/Cloud 模式切换（本机 API / 远程 API）
 - 端口冲突检测（9001 / 直播端口）
 - 环境体检（仓库结构、Python、模型、XTTS、端口）

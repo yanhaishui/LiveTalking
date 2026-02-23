@@ -52,6 +52,17 @@ module.exports = {
     output: "dist",
   },
   files: ["main.js", "preload.js", "renderer/**/*", "scripts/**/*", "!renderer/**/*.map"],
+  extraResources: [
+    {
+      from: path.join(__dirname, "..", "web_admin"),
+      to: "web_admin",
+      filter: ["**/*"],
+    },
+    {
+      from: path.join(__dirname, "..", "..", "assets", "main.png"),
+      to: path.join("assets", "main.png"),
+    },
+  ],
   asar: true,
   artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
   afterSign: path.join("scripts", "notarize.js"),

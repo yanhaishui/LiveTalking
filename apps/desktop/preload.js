@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics"),
   exportSettings: () => ipcRenderer.invoke("desktop:export-settings"),
   importSettings: () => ipcRenderer.invoke("desktop:import-settings"),
+  pickRepoRoot: () => ipcRenderer.invoke("desktop:pick-repo-root"),
 
   openWebAdminInBrowser: () => ipcRenderer.invoke("desktop:open-web-admin"),
   checkUpdates: () => ipcRenderer.invoke("desktop:check-updates"),

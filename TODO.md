@@ -211,3 +211,4 @@
 - [x] macOS 公证自动化钩子已接入：`afterSign -> apps/desktop/scripts/notarize.js`
 - [x] 发布源企业化配置：`electron-builder.config.js` 支持 GitHub/Generic 发布源与环境变量注入
 - [x] 客户交付文档补齐：新增桌面版客户使用手册（安装/首启/日常/排障）
+- [x] 修复安装版启动路径问题：支持 UI 选择项目目录 + 内置 web_admin 资源兜底

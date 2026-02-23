@@ -72,6 +72,13 @@
           </div>
           <form id="settingsForm" class="grid-form">
             <label>
+              LiveTalking 项目目录
+              <input id="settingRepoRoot" placeholder="/Users/xxx/LiveTalking" readonly />
+            </label>
+            <div class="inline-actions">
+              <button type="button" id="btnPickRepoRoot" class="btn ghost">选择项目目录</button>
+            </div>
+            <label>
               运行模式
               <select id="settingRuntimeMode">
                 <option value="local">本机模式（托管 control_api）</option>

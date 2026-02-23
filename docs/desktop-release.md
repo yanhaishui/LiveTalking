@@ -78,3 +78,7 @@ npm run dist:mac:publish
 
 ## 6. 客户侧使用文档
 - `/Users/yanhaishui/IdeaProjects/jhipster/LiveTalking/docs/customer-desktop-guide.md`
+
+补充说明：
+- 安装版首次启动需要在桌面端“运行设置”里选择 LiveTalking 项目目录（包含 `app.py`）。
+- 桌面端已内置 `web_admin` 静态资源，可作为管理台托管兜底。

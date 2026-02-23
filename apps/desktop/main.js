@@ -29,6 +29,7 @@ let apiRestartTimer = null;
 
 const defaultSettings = {
   runtimeMode: "local", // local | cloud
+  repoRoot: "",
   remoteApiBase: "http://127.0.0.1:9001",
   autoStartApi: true,
   autoRestartApi: true,
@@ -48,6 +49,7 @@ const state = {
     dir: "",
     url: "",
     running: false,
+    source: "",
   },
   api: {
     running: false,
@@ -121,21 +123,73 @@ function broadcastStatus() {
   });
 }
 
-function resolveRepoRoot() {
-  const fromEnv = String(process.env.LIVETALKING_REPO_ROOT || "").trim();
-  if (fromEnv) {
-    return path.resolve(fromEnv);
+function normalizeRepoRootInput(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  return path.resolve(text);
+}
+
+function existsDir(dirPath) {
+  if (!dirPath) return false;
+  try {
+    return fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory();
+  } catch (_) {
+    return false;
   }
-  if (app.isPackaged) {
-    return process.cwd();
+}
+
+function isValidRepoRoot(repoRoot) {
+  if (!existsDir(repoRoot)) return false;
+  const appEntry = path.join(repoRoot, "app.py");
+  const controlApiEntry = path.join(repoRoot, "apps", "control_api", "__main__.py");
+  return fs.existsSync(appEntry) && fs.existsSync(controlApiEntry);
+}
+
+function resolveBundledWebAdminDir() {
+  const candidates = [
+    path.join(process.resourcesPath || "", "web_admin"),
+    path.join(__dirname, "..", "web_admin"),
+  ];
+  for (const dir of candidates) {
+    if (existsDir(dir) && fs.existsSync(path.join(dir, "index.html"))) {
+      return dir;
+    }
   }
-  return path.resolve(__dirname, "..", "..");
+  return "";
+}
+
+function resolveRepoRoot(preferred = "") {
+  const fromEnv = normalizeRepoRootInput(process.env.LIVETALKING_REPO_ROOT || "");
+  const fromPreferred = normalizeRepoRootInput(preferred);
+  const fromSetting = normalizeRepoRootInput(state.settings.repoRoot);
+
+  const homeDir = app.getPath("home");
+  const docDir = app.getPath("documents");
+  const candidates = [
+    fromEnv,
+    fromPreferred,
+    fromSetting,
+    path.resolve(__dirname, "..", ".."),
+    path.resolve(process.cwd()),
+    path.join(homeDir, "IdeaProjects", "jhipster", "LiveTalking"),
+    path.join(homeDir, "LiveTalking"),
+    path.join(docDir, "LiveTalking"),
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    if (isValidRepoRoot(dir)) return dir;
+  }
+  for (const dir of candidates) {
+    if (existsDir(dir)) return dir;
+  }
+  return path.resolve(process.cwd());
 }
 
 function normalizeSettings(raw) {
   const input = raw && typeof raw === "object" ? raw : {};
   return {
     runtimeMode: input.runtimeMode === "cloud" ? "cloud" : "local",
+    repoRoot: normalizeRepoRootInput(input.repoRoot || defaultSettings.repoRoot),
     remoteApiBase: String(input.remoteApiBase || defaultSettings.remoteApiBase).trim() || defaultSettings.remoteApiBase,
     autoStartApi: input.autoStartApi !== false,
     autoRestartApi: input.autoRestartApi !== false,
@@ -175,14 +229,29 @@ function saveSettings() {
   fs.writeFileSync(state.settingsPath, JSON.stringify(state.settings, null, 2), "utf8");
 }
 
+async function restartWebAdminServer() {
+  await stopWebAdminServer();
+  await startWebAdminServer();
+}
+
 async function updateSettings(patch) {
   const prev = { ...state.settings };
+  const prevRepoRoot = state.repoRoot;
   state.settings = normalizeSettings({ ...state.settings, ...(patch || {}) });
   saveSettings();
+  state.repoRoot = resolveRepoRoot(state.settings.repoRoot);
   applyEffectiveApiBase();
   if (autoUpdater) {
     autoUpdater.allowPrerelease = state.settings.updateChannel === "beta";
     autoUpdater.channel = state.settings.updateChannel === "beta" ? "beta" : "latest";
+  }
+
+  if (prevRepoRoot !== state.repoRoot) {
+    pushLog("INFO", `项目目录已切换: ${state.repoRoot}`);
+    await restartWebAdminServer();
+    if (state.settings.runtimeMode === "local" && state.api.running) {
+      await restartControlApi();
+    }
   }
 
   if (prev.runtimeMode !== state.settings.runtimeMode) {
@@ -332,18 +401,20 @@ async function runEnvironmentChecks() {
   const checks = [];
   const repoRoot = state.repoRoot;
   const webAdminDir = path.join(repoRoot, "apps", "web_admin");
+  const bundledWebAdminDir = resolveBundledWebAdminDir();
   const controlApiEntry = path.join(repoRoot, "apps", "control_api", "__main__.py");
   const modelDir = path.join(repoRoot, "models");
   const avatarsDir = path.join(repoRoot, "data", "avatars");
   const pythonPath = resolvePythonPath(repoRoot);
+  const repoOk = isValidRepoRoot(repoRoot);
 
   checks.push(
     makeCheck(
       "repo.root",
       "仓库目录",
-      fs.existsSync(repoRoot) ? "ok" : "error",
-      fs.existsSync(repoRoot) ? repoRoot : `目录不存在: ${repoRoot}`,
-      fs.existsSync(repoRoot) ? "" : "请在设置 LIVETALKING_REPO_ROOT 后重启桌面端",
+      repoOk ? "ok" : "error",
+      repoOk ? repoRoot : `目录无效或不完整: ${repoRoot}`,
+      repoOk ? "" : "请在运行设置中点击“选择项目目录”，定位到 LiveTalking 根目录",
     ),
   );
 
@@ -351,9 +422,13 @@ async function runEnvironmentChecks() {
     makeCheck(
       "web_admin.dir",
       "web_admin 目录",
-      fs.existsSync(webAdminDir) ? "ok" : "error",
-      fs.existsSync(webAdminDir) ? webAdminDir : "缺少 apps/web_admin",
-      fs.existsSync(webAdminDir) ? "" : "请确认代码仓库完整，或重新拉取项目",
+      fs.existsSync(webAdminDir) || Boolean(bundledWebAdminDir) ? "ok" : "error",
+      fs.existsSync(webAdminDir)
+        ? webAdminDir
+        : bundledWebAdminDir
+          ? `使用桌面内置资源: ${bundledWebAdminDir}`
+          : "缺少 apps/web_admin 且无内置资源",
+      fs.existsSync(webAdminDir) || Boolean(bundledWebAdminDir) ? "" : "请确认代码仓库完整，或重新打包桌面端",
     ),
   );
 
@@ -368,7 +443,7 @@ async function runEnvironmentChecks() {
   );
 
   const pyCheck = spawnSync(pythonPath, ["--version"], {
-    cwd: repoRoot,
+    cwd: existsDir(repoRoot) ? repoRoot : app.getPath("home"),
     timeout: 3000,
     encoding: "utf8",
     windowsHide: true,
@@ -573,9 +648,21 @@ function createWebAdminRequestHandler(baseDir) {
 async function startWebAdminServer() {
   if (webAdminServer && state.webAdmin.running) return;
 
-  const webAdminDir = path.join(state.repoRoot, "apps", "web_admin");
-  if (!fs.existsSync(webAdminDir)) {
-    throw new Error(`web_admin 目录不存在: ${webAdminDir}`);
+  const repoWebAdminDir = path.join(state.repoRoot, "apps", "web_admin");
+  const bundledWebAdminDir = resolveBundledWebAdminDir();
+
+  let webAdminDir = "";
+  let source = "";
+  if (existsDir(repoWebAdminDir) && fs.existsSync(path.join(repoWebAdminDir, "index.html"))) {
+    webAdminDir = repoWebAdminDir;
+    source = "repo";
+  } else if (bundledWebAdminDir) {
+    webAdminDir = bundledWebAdminDir;
+    source = "bundle";
+  }
+
+  if (!webAdminDir) {
+    throw new Error(`web_admin 目录不存在: ${repoWebAdminDir}`);
   }
 
   const server = http.createServer(createWebAdminRequestHandler(webAdminDir));
@@ -592,9 +679,10 @@ async function startWebAdminServer() {
     dir: webAdminDir,
     url: `http://127.0.0.1:${port}`,
     running: true,
+    source,
   };
 
-  pushLog("INFO", `web_admin 已托管: ${state.webAdmin.url}`);
+  pushLog("INFO", `web_admin 已托管: ${state.webAdmin.url} (source=${source || "unknown"})`);
   broadcastStatus();
 }
 
@@ -604,6 +692,7 @@ async function stopWebAdminServer() {
   webAdminServer = null;
   await new Promise((resolve) => server.close(() => resolve()));
   state.webAdmin.running = false;
+  state.webAdmin.url = "";
   pushLog("INFO", "web_admin 托管已停止");
 }
 
@@ -663,6 +752,14 @@ async function startControlApi() {
     state.api.running = true;
     broadcastStatus();
     return;
+  }
+
+  if (!isValidRepoRoot(state.repoRoot)) {
+    const msg = `control_api 启动失败: 项目目录无效 (${state.repoRoot})，请在运行设置中重新选择 LiveTalking 目录`;
+    state.api.lastError = msg;
+    pushLog("ERROR", msg);
+    broadcastStatus();
+    throw new Error(msg);
   }
 
   const portCheck = await isPortInUse(9001);
@@ -836,8 +933,12 @@ function createMainWindow() {
 function createTray() {
   if (tray) return;
 
-  const iconPath = path.join(state.repoRoot, "assets", "main.png");
-  const icon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+  const iconCandidates = [
+    path.join(state.repoRoot, "assets", "main.png"),
+    path.join(process.resourcesPath || "", "assets", "main.png"),
+  ];
+  const iconPath = iconCandidates.find((item) => fs.existsSync(item)) || "";
+  const icon = iconPath ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
 
   tray = new Tray(icon);
   tray.setToolTip(APP_TITLE);
@@ -993,6 +1094,37 @@ async function importSettingsFile() {
   return { ok: true, path: filePath };
 }
 
+async function pickRepoRoot() {
+  const picked = await dialog.showOpenDialog({
+    title: "选择 LiveTalking 项目目录",
+    properties: ["openDirectory"],
+  });
+  if (picked.canceled || !picked.filePaths?.length) {
+    return { ok: false, message: "已取消选择" };
+  }
+
+  const selected = normalizeRepoRootInput(picked.filePaths[0]);
+  state.settings.repoRoot = selected;
+  saveSettings();
+  state.repoRoot = resolveRepoRoot(selected);
+
+  pushLog("INFO", `已选择项目目录: ${state.repoRoot}`);
+  await restartWebAdminServer();
+  if (state.settings.runtimeMode === "local" && state.settings.autoStartApi) {
+    await startControlApi().catch((err) => {
+      pushLog("WARN", `选择项目目录后自动启动 API 失败: ${err.message}`);
+    });
+  }
+  await runEnvironmentChecks();
+  broadcastStatus();
+
+  return {
+    ok: true,
+    path: state.repoRoot,
+    valid: isValidRepoRoot(state.repoRoot),
+  };
+}
+
 function registerIpcHandlers() {
   ipcMain.handle("desktop:get-status", async () => getStatus());
 
@@ -1055,9 +1187,16 @@ function registerIpcHandlers() {
     return await importSettingsFile();
   });
 
+  ipcMain.handle("desktop:pick-repo-root", async () => {
+    return await pickRepoRoot();
+  });
+
   ipcMain.handle("desktop:open-web-admin", async () => {
     if (!state.webAdmin.url) {
-      throw new Error("web_admin 还未启动");
+      await startWebAdminServer();
+    }
+    if (!state.webAdmin.url) {
+      throw new Error("web_admin 还未启动，请先选择正确项目目录");
     }
     await shell.openExternal(state.webAdmin.url);
     return { ok: true };
@@ -1069,8 +1208,8 @@ function registerIpcHandlers() {
 }
 
 async function bootstrap() {
-  state.repoRoot = resolveRepoRoot();
   loadSettings();
+  state.repoRoot = resolveRepoRoot(state.settings.repoRoot);
   applyEffectiveApiBase();
   setupAutoUpdater();
 

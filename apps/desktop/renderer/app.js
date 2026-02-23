@@ -81,6 +81,7 @@ function renderSettings() {
   if (!settings) return;
 
   byId("settingRuntimeMode").value = settings.runtimeMode || "local";
+  byId("settingRepoRoot").value = state.status?.repoRoot || settings.repoRoot || "";
   byId("settingRemoteApiBase").value = settings.remoteApiBase || "";
   byId("settingTtsServer").value = settings.ttsServer || "http://127.0.0.1:9000";
   byId("settingLivePort").value = String(settings.livePort || 8010);
@@ -141,7 +142,8 @@ function renderStatus() {
   setChip("updateChip", `更新: ${status.updater?.message || "未检查"}`, updaterType);
 
   byId("apiMeta").textContent = `${status.api?.effectiveUrl || "-"} | pid=${status.api?.pid || 0}`;
-  byId("webMeta").textContent = status.webAdmin?.url || "-";
+  const webSource = status.webAdmin?.source ? ` (${status.webAdmin.source})` : "";
+  byId("webMeta").textContent = `${status.webAdmin?.url || "-"}${webSource}`;
   byId("pythonMeta").textContent = status.api?.pythonPath || "-";
   byId("repoMeta").textContent = status.repoRoot || "-";
 
@@ -222,6 +224,7 @@ function startAutoPolling() {
 
 function collectSettingsPatchFromForm() {
   return {
+    repoRoot: byId("settingRepoRoot").value.trim(),
     runtimeMode: byId("settingRuntimeMode").value,
     remoteApiBase: byId("settingRemoteApiBase").value.trim(),
     ttsServer: byId("settingTtsServer").value.trim(),
@@ -269,7 +272,30 @@ function bindEvents() {
     try {
       await window.desktopBridge.openWebAdminInBrowser();
     } catch (err) {
-      notify(`打开浏览器失败: ${err.message}`, "error");
+      const msg = String(err?.message || err);
+      if (msg.includes("web_admin")) {
+        notify("打开管理台失败：请先点击“选择项目目录”并定位到 LiveTalking 根目录", "error");
+      } else {
+        notify(`打开浏览器失败: ${msg}`, "error");
+      }
+    }
+  });
+
+  byId("btnPickRepoRoot")?.addEventListener("click", async () => {
+    try {
+      const result = await window.desktopBridge.pickRepoRoot();
+      if (!result?.ok) {
+        notify(result?.message || "已取消选择项目目录", "info");
+        return;
+      }
+      if (result.valid) {
+        notify(`项目目录已更新: ${result.path}`, "ok");
+      } else {
+        notify(`目录已记录，但不完整: ${result.path}，请确认是 LiveTalking 根目录`, "warn");
+      }
+      await Promise.all([refreshStatus(), refreshChecks(), refreshLogs()]);
+    } catch (err) {
+      notify(`选择项目目录失败: ${err.message}`, "error");
     }
   });
 
