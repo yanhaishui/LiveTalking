@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>码布斯 MEH 数字人系统</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">MEH</div>
+        <div>
+          <h1>码布斯数字人系统</h1>
+          <p>LiveTalking 控制台</p>
+        </div>
+      </div>
+
+      <nav class="side-nav" id="sideNav">
+        <button class="nav-link active" data-page="dashboard">首页控制台</button>
+        <button class="nav-link" data-page="health">系统体检</button>
+        <button class="nav-link" data-page="live">直播控制</button>
+        <button class="nav-link" data-page="avatars">形象管理</button>
+        <button class="nav-link" data-page="voices">声音管理</button>
+        <button class="nav-link" data-page="scripts">脚本管理</button>
+        <button class="nav-link" data-page="playlists">轮播计划</button>
+        <button class="nav-link" data-page="presets">直播预设</button>
+        <button class="nav-link" data-page="ops">任务与消息</button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <small>建议链路: wav2lip + virtualcam</small>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <h2 id="currentPageTitle">首页控制台</h2>
+          <p id="globalNotice" class="global-notice">系统就绪</p>
+          <div class="runtime-strip">
+            <span id="apiHealthChip" class="chip info">API 未检测</span>
+            <span id="liveHealthChip" class="chip warn">直播未运行</span>
+            <label class="switch-chip">
+              <input id="autoRefreshSwitch" type="checkbox" />
+              <span>自动刷新（15s）</span>
+            </label>
+          </div>
+        </div>
+        <div class="api-box">
+          <label for="apiBase">Control API</label>
+          <input id="apiBase" value="http://127.0.0.1:9001" />
+          <button id="btnSaveApi" class="btn">保存</button>
+          <button id="btnReloadAll" class="btn ghost">全局刷新</button>
+        </div>
+      </header>
+
+      <section class="view active" data-view="dashboard">
+        <div class="grid-cards">
+          <article class="metric-card">
+            <h3>直播状态</h3>
+            <p id="dashLiveText">未运行</p>
+          </article>
+          <article class="metric-card">
+            <h3>形象模型</h3>
+            <p id="dashAvatarCount">0</p>
+          </article>
+          <article class="metric-card">
+            <h3>声音模型</h3>
+            <p id="dashVoiceCount">0</p>
+          </article>
+          <article class="metric-card">
+            <h3>脚本数量</h3>
+            <p id="dashScriptCount">0</p>
+          </article>
+          <article class="metric-card">
+            <h3>进行中任务</h3>
+            <p id="dashRunningJobs">0</p>
+          </article>
+          <article class="metric-card">
+            <h3>轮播计划</h3>
+            <p id="dashPlaylistCount">0</p>
+          </article>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>最近任务</h3>
+            <button id="btnReloadJobsDash" class="btn ghost">刷新</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>类型</th>
+                  <th>状态</th>
+                  <th>重试</th>
+                  <th>更新时间（UTC+8）</th>
+                </tr>
+              </thead>
+              <tbody id="dashJobTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="health">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>系统体检</h3>
+            <div class="head-actions">
+              <label class="log-inline">
+                XTTS 服务地址
+                <input id="healthTtsServer" class="table-input health-input" value="http://127.0.0.1:9000" />
+              </label>
+              <button id="btnRunHealthChecks" class="btn">开始体检</button>
+            </div>
+          </div>
+          <div class="health-summary">
+            <span id="healthSummaryOk" class="tag ok">OK 0</span>
+            <span id="healthSummaryWarn" class="tag warn">WARN 0</span>
+            <span id="healthSummaryError" class="tag bad">ERROR 0</span>
+            <span id="healthSummaryTime" class="chip info">未检测</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>检查项</th>
+                  <th>状态</th>
+                  <th>详情</th>
+                  <th>建议</th>
+                </tr>
+              </thead>
+              <tbody id="healthCheckTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="live">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>直播控制</h3>
+            <div class="head-actions">
+              <button id="btnRefreshStatus" class="btn ghost">刷新状态</button>
+              <button id="btnStopLive" class="btn danger">停止直播</button>
+            </div>
+          </div>
+          <div id="liveStatus" class="status-box">未查询</div>
+
+          <form id="startLiveForm" class="grid-form single">
+            <div class="wizard-head">
+              <button type="button" class="wizard-step-btn active" data-step-btn="1">1. 基础</button>
+              <button type="button" class="wizard-step-btn" data-step-btn="2">2. 声音</button>
+              <button type="button" class="wizard-step-btn" data-step-btn="3">3. 推流</button>
+            </div>
+
+            <div class="wizard-step active" data-step-panel="1">
+              <div class="grid-form">
+                <label>
+                  Avatar ID
+                  <select id="liveAvatarId" required></select>
+                </label>
+                <label>
+                  模型
+                  <select id="liveModel">
+                    <option value="wav2lip">wav2lip</option>
+                  </select>
+                </label>
+                <label>
+                  传输
+                  <select id="liveTransport">
+                    <option value="virtualcam">virtualcam</option>
+                    <option value="webrtc">webrtc</option>
+                    <option value="rtcpush">rtcpush</option>
+                  </select>
+                </label>
+                <label>
+                  端口
+                  <input id="livePort" type="number" value="8010" min="1" max="65535" />
+                </label>
+              </div>
+            </div>
+
+            <div class="wizard-step" data-step-panel="2">
+              <div class="grid-form">
+                <label>
+                  TTS 引擎
+                  <select id="liveTts"></select>
+                </label>
+                <label>
+                  REF_FILE
+                  <select id="liveRefFile"></select>
+                </label>
+                <label>
+                  TTS_SERVER
+                  <input id="liveTtsServer" placeholder="http://127.0.0.1:9000" />
+                </label>
+                <label>
+                  REF_TEXT（可选）
+                  <select id="liveRefText"></select>
+                </label>
+              </div>
+            </div>
+
+            <div class="wizard-step" data-step-panel="3">
+              <label class="full-width">
+                push_url（仅 rtcpush）
+                <input id="livePushUrl" placeholder="http://localhost:1985/rtc/v1/whip/?app=live&stream=livestream" />
+              </label>
+              <pre id="liveWizardSummary" class="mini-log">请先完成前两步配置。</pre>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" id="btnLiveWizardPrev" class="btn ghost">上一步</button>
+              <button type="button" id="btnLiveWizardNext" class="btn ghost">下一步</button>
+              <button type="submit" id="btnLiveStartSubmit" class="btn">启动直播</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>会话日志</h3>
+            <div class="head-actions">
+              <label class="switch-chip compact">
+                <input id="logFollowSwitch" type="checkbox" />
+                <span>实时追踪</span>
+              </label>
+              <label class="switch-chip compact">
+                <input id="logAutoScrollSwitch" type="checkbox" />
+                <span>自动滚动</span>
+              </label>
+              <button id="btnLoadLogs" class="btn ghost">立即刷新</button>
+            </div>
+          </div>
+          <div class="log-toolbar">
+            <label class="log-inline">
+              刷新间隔
+              <select id="logPollInterval" class="table-select">
+                <option value="1000">1 秒</option>
+                <option value="1500">1.5 秒</option>
+                <option value="3000">3 秒</option>
+                <option value="5000">5 秒</option>
+              </select>
+            </label>
+            <input id="logFilterKeyword" class="table-input log-keyword" placeholder="关键词过滤（如 ERROR / Traceback）" />
+            <button id="btnCopyLogs" class="btn ghost sm">复制日志</button>
+            <button id="btnClearLogsView" class="btn ghost sm">清空视图</button>
+            <span id="logMetaText" class="log-meta">未加载</span>
+          </div>
+          <pre id="logBox" class="log-box"></pre>
+        </div>
+
+        <div class="panel">
+          <h3>OBS 接入说明</h3>
+          <ul class="hint-list">
+            <li>推荐使用 virtualcam: 先在本系统启动直播，再在 OBS 选择 LiveTalking 虚拟摄像头。</li>
+            <li>OBS 推流地址和串流密钥在 OBS/直播伴侣中配置。</li>
+            <li>若选择 rtcpush，需填写 push_url（通常是 SRS/WHIP 地址）。</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="view" data-view="avatars">
+        <div class="panel two-col">
+          <div>
+            <div class="panel-head">
+              <h3>创建形象克隆任务</h3>
+              <button id="btnReloadAvatars" class="btn ghost">刷新列表</button>
+            </div>
+            <form id="avatarForm" class="grid-form single">
+              <label>名称<input id="avatarName" required /></label>
+              <label>选择视频文件（推荐）
+                <input id="avatarVideoFile" type="file" accept=".mp4,.mov,.mkv,.avi,.webm,video/*" />
+              </label>
+              <label>视频路径（可选，服务器本地路径）
+                <input id="avatarVideoPath" placeholder="/abs/path/video.mp4" />
+              </label>
+              <div id="avatarUploadHint" class="field-hint">可直接选择本机视频，系统会自动上传并回填路径。</div>
+              <div id="avatarUploadProgressWrap" class="upload-progress-wrap hidden">
+                <div class="upload-progress"><div id="avatarUploadProgressBar" class="upload-progress-bar"></div></div>
+                <span id="avatarUploadProgressText" class="upload-progress-text">0%</span>
+              </div>
+              <label>Avatar ID（可选）<input id="avatarCustomId" placeholder="me_avatar_v1" /></label>
+              <label>图像尺寸<input id="avatarImgSize" type="number" value="256" min="96" max="512" /></label>
+              <div class="form-actions"><button type="submit" class="btn">提交克隆任务</button></div>
+            </form>
+          </div>
+
+          <div class="editor-card" id="avatarEditorCard">
+            <h4>编辑形象</h4>
+            <form id="avatarEditForm" class="grid-form single">
+              <label>Avatar ID<input id="avatarEditId" readonly /></label>
+              <label>名称<input id="avatarEditName" required /></label>
+              <label>状态<input id="avatarEditStatus" placeholder="ready / disabled" /></label>
+              <label>封面路径（可选）<input id="avatarEditCover" /></label>
+              <div class="form-actions">
+                <button type="submit" class="btn">保存修改</button>
+                <button type="button" id="avatarEditCancel" class="btn ghost">取消</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>形象列表</h3>
+            <div class="head-actions">
+              <input id="avatarSearch" class="table-input" placeholder="搜索名称或ID" />
+              <select id="avatarStatusFilter" class="table-select">
+                <option value="">全部状态</option>
+                <option value="ready">ready</option>
+                <option value="disabled">disabled</option>
+              </select>
+              <span id="avatarCountLabel" class="list-count">0 条</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>Avatar ID</th>
+                  <th>路径</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="avatarTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="voices">
+        <div class="panel two-col">
+          <div>
+            <div class="panel-head">
+              <h3>创建声音克隆任务</h3>
+              <button id="btnReloadVoices" class="btn ghost">刷新列表</button>
+            </div>
+            <form id="voiceForm" class="grid-form single">
+              <label>名称<input id="voiceName" required /></label>
+              <label>选择参考音频（推荐）
+                <input id="voiceRefWavFile" type="file" accept=".wav,audio/wav,audio/x-wav" />
+              </label>
+              <label>参考音频路径（可选，服务器本地路径）
+                <input id="voiceRefWav" placeholder="/abs/path/ref.wav" />
+              </label>
+              <div id="voiceUploadHint" class="field-hint">可直接选择本机 wav 文件，系统会自动上传并回填路径。</div>
+              <div id="voiceUploadProgressWrap" class="upload-progress-wrap hidden">
+                <div class="upload-progress"><div id="voiceUploadProgressBar" class="upload-progress-bar"></div></div>
+                <span id="voiceUploadProgressText" class="upload-progress-text">0%</span>
+              </div>
+              <label>XTTS 服务地址<input id="voiceTtsServer" value="http://127.0.0.1:9000" /></label>
+              <label>Voice ID（可选）<input id="voiceCustomId" placeholder="voice_me_v1" /></label>
+              <label>自动生成试听
+                <select id="voiceGeneratePreview"><option value="true">是</option><option value="false">否</option></select>
+              </label>
+              <label>试听文案<input id="voicePreviewText" value="你好，欢迎来到直播间。" /></label>
+              <label>temperature（可选）<input id="voiceTemperature" type="number" step="0.01" placeholder="0.7" /></label>
+              <label>speed（可选）<input id="voiceSpeed" type="number" step="0.01" placeholder="1.0" /></label>
+              <label>top_k（可选）<input id="voiceTopK" type="number" min="1" max="1000" placeholder="50" /></label>
+              <label>top_p（可选）<input id="voiceTopP" type="number" step="0.01" min="0" max="1" placeholder="0.8" /></label>
+              <label>repetition_penalty（可选）<input id="voiceRepetitionPenalty" type="number" step="0.01" placeholder="1.1" /></label>
+              <div class="form-actions"><button type="submit" class="btn">提交克隆任务</button></div>
+            </form>
+          </div>
+
+          <div>
+            <div class="editor-card" id="voiceEditorCard">
+              <h4>编辑声音</h4>
+              <form id="voiceEditForm" class="grid-form single">
+                <label>Voice ID<input id="voiceEditId" readonly /></label>
+                <label>名称<input id="voiceEditName" required /></label>
+                <label>引擎<input id="voiceEditEngine" value="xtts" /></label>
+                <label>状态<input id="voiceEditStatus" placeholder="ready / disabled" /></label>
+                <label>参考音频路径<input id="voiceEditRef" /></label>
+                <div class="form-actions">
+                  <button type="submit" class="btn">保存修改</button>
+                  <button type="button" id="voiceEditCancel" class="btn ghost">取消</button>
+                </div>
+              </form>
+            </div>
+
+            <div class="editor-card">
+              <h4>声音试听</h4>
+              <form id="voicePreviewForm" class="grid-form single">
+                <label>选择 Voice<select id="voicePreviewVoiceId"></select></label>
+                <label>试听文案<textarea id="voicePreviewInputText" rows="3">你好，欢迎来到直播间。</textarea></label>
+                <label>XTTS 服务地址<input id="voicePreviewServer" value="http://127.0.0.1:9000" /></label>
+                <label>temperature（可选）<input id="voicePreviewTemperature" type="number" step="0.01" /></label>
+                <label>speed（可选）<input id="voicePreviewSpeed" type="number" step="0.01" /></label>
+                <label>top_k（可选）<input id="voicePreviewTopK" type="number" min="1" max="1000" /></label>
+                <label>top_p（可选）<input id="voicePreviewTopP" type="number" step="0.01" min="0" max="1" /></label>
+                <label>repetition_penalty（可选）<input id="voicePreviewPenalty" type="number" step="0.01" /></label>
+                <div class="form-actions"><button type="submit" class="btn">生成试听</button></div>
+              </form>
+              <pre id="voicePreviewResult" class="mini-log"></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>声音列表</h3>
+            <div class="head-actions">
+              <input id="voiceSearch" class="table-input" placeholder="搜索名称或ID" />
+              <select id="voiceEngineFilter" class="table-select">
+                <option value="">全部引擎</option>
+                <option value="xtts">xtts</option>
+                <option value="edgetts">edgetts</option>
+              </select>
+              <select id="voiceStatusFilter" class="table-select">
+                <option value="">全部状态</option>
+                <option value="ready">ready</option>
+                <option value="disabled">disabled</option>
+              </select>
+              <span id="voiceCountLabel" class="list-count">0 条</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>Voice ID</th>
+                  <th>引擎</th>
+                  <th>状态</th>
+                  <th>试听文件</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="voiceTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="scripts">
+        <div class="panel two-col">
+          <div>
+            <div class="panel-head">
+              <h3>新增脚本</h3>
+              <button id="btnReloadScripts" class="btn ghost">刷新列表</button>
+            </div>
+            <form id="scriptForm" class="grid-form single">
+              <label>标题<input id="scriptTitle" required /></label>
+              <label>分类<input id="scriptCategory" placeholder="产品介绍 / 公司介绍" /></label>
+              <label>内容<textarea id="scriptContent" rows="5" required></textarea></label>
+              <div class="form-actions"><button type="submit" class="btn">新增脚本</button></div>
+            </form>
+          </div>
+
+          <div class="editor-card" id="scriptEditorCard">
+            <h4>编辑脚本</h4>
+            <form id="scriptEditForm" class="grid-form single">
+              <label>Script ID<input id="scriptEditId" readonly /></label>
+              <label>标题<input id="scriptEditTitle" required /></label>
+              <label>分类<input id="scriptEditCategory" /></label>
+              <label>优先级<input id="scriptEditPriority" type="number" /></label>
+              <label>是否启用<select id="scriptEditEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+              <label>内容<textarea id="scriptEditContent" rows="5" required></textarea></label>
+              <div class="form-actions">
+                <button type="submit" class="btn">保存修改</button>
+                <button type="button" id="scriptEditCancel" class="btn ghost">取消</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>脚本列表</h3>
+            <div class="head-actions">
+              <input id="scriptSearch" class="table-input" placeholder="搜索标题/分类/ID" />
+              <select id="scriptEnabledFilter" class="table-select">
+                <option value="">启用状态: 全部</option>
+                <option value="true">仅启用</option>
+                <option value="false">仅停用</option>
+              </select>
+              <span id="scriptCountLabel" class="list-count">0 条</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>标题</th>
+                  <th>ID</th>
+                  <th>分类</th>
+                  <th>优先级</th>
+                  <th>启用</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="scriptTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="playlists">
+        <div class="panel two-col">
+          <div>
+            <div class="panel-head">
+              <h3>轮播计划</h3>
+              <button id="btnReloadPlaylists" class="btn ghost">刷新列表</button>
+            </div>
+            <form id="playlistForm" class="grid-form single">
+              <label>计划名称<input id="playlistName" required /></label>
+              <label>播放模式<select id="playlistMode"><option value="sequential">顺序</option><option value="random">随机</option></select></label>
+              <label>间隔秒数<input id="playlistIntervalSec" type="number" min="1" max="3600" value="30" /></label>
+              <label>是否启用<select id="playlistEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+              <div class="form-actions"><button type="submit" class="btn">新增计划</button></div>
+            </form>
+
+            <div class="sub-block">
+              <h4>添加脚本到计划</h4>
+              <form id="playlistItemForm" class="grid-form single">
+                <label>选择轮播计划<select id="playlistItemPlaylistId"></select></label>
+                <label>选择脚本<select id="playlistItemScriptId"></select></label>
+                <label>排序值<input id="playlistItemSortOrder" type="number" value="0" /></label>
+                <label>权重<input id="playlistItemWeight" type="number" min="1" max="100" value="1" /></label>
+                <div class="form-actions"><button type="submit" class="btn">添加脚本</button></div>
+              </form>
+            </div>
+          </div>
+
+          <div class="editor-card" id="playlistEditorCard">
+            <h4>编辑轮播计划</h4>
+            <form id="playlistEditForm" class="grid-form single">
+              <label>Playlist ID<input id="playlistEditId" readonly /></label>
+              <label>计划名称<input id="playlistEditName" required /></label>
+              <label>播放模式<select id="playlistEditMode"><option value="sequential">顺序</option><option value="random">随机</option></select></label>
+              <label>间隔秒数<input id="playlistEditInterval" type="number" min="1" max="3600" /></label>
+              <label>是否启用<select id="playlistEditEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+              <div class="form-actions">
+                <button type="submit" class="btn">保存修改</button>
+                <button type="button" id="playlistEditCancel" class="btn ghost">取消</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>轮播计划列表</h3>
+            <div class="head-actions">
+              <input id="playlistSearch" class="table-input" placeholder="搜索计划名或ID" />
+              <select id="playlistEnabledFilter" class="table-select">
+                <option value="">启用状态: 全部</option>
+                <option value="true">仅启用</option>
+                <option value="false">仅停用</option>
+              </select>
+              <span id="playlistCountLabel" class="list-count">0 条</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>ID</th>
+                  <th>模式</th>
+                  <th>间隔</th>
+                  <th>启用</th>
+                  <th>脚本数</th>
+                  <th>脚本预览</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="playlistTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="presets">
+        <div class="panel two-col">
+          <div>
+            <div class="panel-head">
+              <h3>新增直播预设</h3>
+              <button id="btnReloadPresets" class="btn ghost">刷新列表</button>
+            </div>
+            <form id="presetForm" class="grid-form single">
+              <label>预设名称<input id="presetName" required /></label>
+              <label>Avatar<select id="presetAvatarId"></select></label>
+              <label>Voice（可选）<select id="presetVoiceId"></select></label>
+              <label>模型<select id="presetModel"><option value="wav2lip">wav2lip</option></select></label>
+              <label>传输<select id="presetTransport"><option value="virtualcam">virtualcam</option><option value="webrtc">webrtc</option><option value="rtcpush">rtcpush</option></select></label>
+              <label>端口<input id="presetListenPort" type="number" min="1" max="65535" value="8010" /></label>
+              <label>TTS 引擎<select id="presetTts"></select></label>
+              <label>TTS_SERVER<input id="presetTtsServer" placeholder="http://127.0.0.1:9000" /></label>
+              <label>REF_FILE<select id="presetRefFile"></select></label>
+              <label>REF_TEXT<select id="presetRefText"></select></label>
+              <label>push_url（仅 rtcpush）<input id="presetPushUrl" placeholder="http://localhost:1985/rtc/v1/whip/?app=live&stream=livestream" /></label>
+              <div class="form-actions"><button type="submit" class="btn">新增预设</button></div>
+            </form>
+          </div>
+
+          <div class="editor-card" id="presetEditorCard">
+            <h4>编辑直播预设</h4>
+            <form id="presetEditForm" class="grid-form single">
+              <label>Preset ID<input id="presetEditId" readonly /></label>
+              <label>预设名称<input id="presetEditName" required /></label>
+              <label>Avatar<select id="presetEditAvatarId"></select></label>
+              <label>Voice（可选）<select id="presetEditVoiceId"></select></label>
+              <label>模型<select id="presetEditModel"><option value="wav2lip">wav2lip</option></select></label>
+              <label>传输<select id="presetEditTransport"><option value="virtualcam">virtualcam</option><option value="webrtc">webrtc</option><option value="rtcpush">rtcpush</option></select></label>
+              <label>端口<input id="presetEditListenPort" type="number" min="1" max="65535" /></label>
+              <label>TTS 引擎<select id="presetEditTts"></select></label>
+              <label>TTS_SERVER<input id="presetEditTtsServer" /></label>
+              <label>REF_FILE<select id="presetEditRefFile"></select></label>
+              <label>REF_TEXT<select id="presetEditRefText"></select></label>
+              <label>push_url（仅 rtcpush）<input id="presetEditPushUrl" /></label>
+              <div class="form-actions">
+                <button type="submit" class="btn">保存修改</button>
+                <button type="button" id="presetEditCancel" class="btn ghost">取消</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>预设列表</h3>
+            <div class="head-actions">
+              <input id="presetSearch" class="table-input" placeholder="搜索名称/ID/Avatar" />
+              <select id="presetTransportFilter" class="table-select">
+                <option value="">传输方式: 全部</option>
+                <option value="virtualcam">virtualcam</option>
+                <option value="webrtc">webrtc</option>
+                <option value="rtcpush">rtcpush</option>
+              </select>
+              <span id="presetCountLabel" class="list-count">0 条</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>ID</th>
+                  <th>Avatar</th>
+                  <th>Voice</th>
+                  <th>模式</th>
+                  <th>TTS</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="presetTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="ops">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>播报调度器</h3>
+            <button id="btnRefreshSpeaker" class="btn ghost">刷新调度状态</button>
+          </div>
+          <pre id="speakerStatusBox" class="log-box"></pre>
+          <form id="speakerSayForm" class="grid-form single">
+            <label>手工播报文本<textarea id="speakerSayText" rows="3" required></textarea></label>
+            <label>是否打断<select id="speakerSayInterrupt"><option value="false">否</option><option value="true">是（插播）</option></select></label>
+            <label>优先级（0-100）<input id="speakerSayPriority" type="number" min="0" max="100" value="60" /></label>
+            <div class="form-actions"><button type="submit" class="btn">加入播报队列</button></div>
+          </form>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>平台消息联调</h3>
+          </div>
+          <form id="platformMessageForm" class="grid-form single">
+            <label>平台<input id="platformMsgPlatform" value="douyin" required /></label>
+            <label>房间 ID<input id="platformMsgRoomId" value="room_demo_001" required /></label>
+            <label>消息 ID<input id="platformMsgId" required /></label>
+            <label>用户名称<input id="platformMsgUserName" /></label>
+            <label>优先级（0-100）<input id="platformMsgPriority" type="number" min="0" max="100" value="70" /></label>
+            <label>自动生成回复<select id="platformMsgAutoReply"><option value="true">是</option><option value="false">否</option></select></label>
+            <label>自动入播报队列<select id="platformMsgAutoSpeak"><option value="true">是</option><option value="false">否</option></select></label>
+            <label>插播（可打断）<select id="platformMsgInterrupt"><option value="true">是</option><option value="false">否</option></select></label>
+            <label>消息内容<textarea id="platformMsgContent" rows="3" required></textarea></label>
+            <div class="form-actions"><button type="submit" class="btn">提交消息</button></div>
+          </form>
+          <pre id="platformMsgResult" class="mini-log"></pre>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h3>任务中心</h3>
+            <div class="head-actions">
+              <button id="btnReloadJobs" class="btn ghost">刷新任务</button>
+              <input id="jobSearch" class="table-input" placeholder="搜索任务 ID 或类型" />
+              <select id="jobStatusFilter" class="table-select">
+                <option value="">状态: 全部</option>
+                <option value="queued">queued</option>
+                <option value="running">running</option>
+                <option value="succeeded">succeeded</option>
+                <option value="failed">failed</option>
+                <option value="cancelled">cancelled</option>
+              </select>
+              <span id="jobCountLabel" class="list-count">0 条</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>类型</th>
+                  <th>状态</th>
+                  <th>进度</th>
+                  <th>重试</th>
+                  <th>错误</th>
+                  <th>更新时间（UTC+8）</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="jobTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div id="jobDrawerMask" class="drawer-mask"></div>
+  <aside id="jobDrawer" class="drawer">
+    <div class="drawer-head">
+      <h3 id="jobDrawerTitle">任务详情</h3>
+      <button id="btnCloseJobDrawer" class="btn ghost sm">关闭</button>
+    </div>
+    <div id="jobDrawerMeta" class="field-hint">-</div>
+    <div class="drawer-actions">
+      <button id="btnRetryJobFromDrawer" class="btn">重试该任务</button>
+    </div>
+    <h4>Payload</h4>
+    <pre id="jobDrawerPayload" class="mini-log">{}</pre>
+    <h4>Result</h4>
+    <pre id="jobDrawerResult" class="mini-log">{}</pre>
+    <h4>Logs</h4>
+    <pre id="jobDrawerLogs" class="log-box"></pre>
+  </aside>
+  <div id="toastStack" class="toast-stack"></div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
