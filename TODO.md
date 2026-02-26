@@ -1,217 +1,51 @@
-# LiveTalking 管理台开发 TODO
+# LiveTalking 管理台开发 TODO（精简与扩展）
 
-## 0. 文档说明
-- 目标: 将当前 LiveTalking 从命令行演示升级为可交付客户使用的本地产品。
-- 当前范围: 已完成本地 Web 管理台与 Phase 2 增强，现已启动 Electron 桌面版研发（Windows + macOS）。
-- 技术基线: `wav2lip + virtualcam` 为主链路，`webrtc/rtcpush` 作为扩展。
-- 进度标识:
-  - `[ ]` 未开始
-  - `[~]` 进行中
-  - `[x]` 已完成
+本文件为项目当前已知事项与新增“数字人（视频 + 声音）克隆”工程级清单。变更以工程角度（数字人专家 / 模型专家 / 架构师 / 工程师）表述，并匹配当前代码库结构（`apps/`、`wav2lip/`、`musetalk/`、`ultralight/`、`models/`、`data/`）。
 
 ---
 
-## 1. 优先级清单（去重后）
-
-## P0（当前必须完成）
-- [x] 视频克隆任务流水线: 失败恢复 + 自动重试
-- [x] 声音克隆任务流水线: 试听能力 + 参数化
-- [x] 脚本轮播与问答混合编排: 多计划并发 + 问答优先
-- [~] 直播间消息接入: 平台标准化入口 + 去重 + 优先级调度（已落地统一入口，待接各平台官方采集器）
-
-## P1（P0 完成后）
-- [ ] 关键模块中文注释补齐（流程、状态机、异常分支）
-- [ ] 统一接口错误码与错误信息结构
-- [ ] 关键功能单元测试/集成测试
-
-## P2（桌面端产品化）
-- [x] Electron 桌面端封装（Windows + macOS）
-- [~] 安装器与升级机制（已接入 NSIS/DMG + autoUpdater 框架，待证书发布联调）
-- [~] 审计/权限/导入导出（已实现设置导入导出 + 诊断包导出，待权限体系）
+**当前基线（摘录）**
+- **运行时**: `app.py` 驱动，控制层在 `apps/control_api`（FastAPI），前端在 `apps/web_admin`。
+- **资产存放**: 运行时素材在 [data/](data/)，训练/推理模型在 [models/](models/)。
+- **已具备能力**: Video/Voice 克隆入口、任务中心、Electron 桌面骨架与基本打包链路。
 
 ---
 
-## 2. 已完成能力（基线）
+**数字人克隆工程清单（视频 + 声音 → 本地数字人模型）**
 
-## 2.1 资产与管理
-- [x] UI 克隆真人视频模型（wav2lip avatar）
-- [x] UI 克隆真人声音模型（上传 wav 一键克隆）
-- [x] Avatar/Voice/Script/Playlist/Preset 的 CRUD
-- [x] 预置注册 `wav2lip256_avatar1` 到本地元数据库
-- [x] 直播控制/预设中的 `Avatar ID`、`TTS`、`REF_FILE`、`REF_TEXT` 下拉联动
+- **目标说明**: 将用户在绿幕前拍摄的真人视频与参考语音，转换为可复用、可部署的“数字人”资产（视觉模型产物落在 [models/](models/)；运行时素材与元数据落在 [data/](data/)），支持离线训练、增量更新与实时推理调用。
 
-## 2.2 直播与运维
-- [x] UI 一键启动/停止直播（托管 `app.py` 子进程）
-- [x] 直播运行状态与日志查询
-- [x] OBS 接入说明与 `rtcpush push_url` 配置入口
-- [x] 管理台品牌名替换为“码布斯 MEH 数字人系统”
+- **1. 数据采集与元数据规范**: 定义并实现上传校验（视频 MP4、帧率、分辨率、绿幕色度规范；音频 16/24kHz WAV 单声道）。为每个 take 生成结构化元数据（face_id, take_id, mic_profile, chroma_info），并写入 `data/meta.db`。
 
-## 2.3 自动播报与任务中心
-- [x] 任务中心（创建/查询/取消）
-- [x] `avatars:clone / voices:clone` 异步任务接口
-- [x] 消息入库 + 规则回复 + speak 入队
-- [x] 统一播报调度器（轮播脚本 + 智能回复插播）
-- [x] 调度器状态查询与手工播报接口
+- **2. 绿幕预处理与分割**: 实现色度抠像 + 深度分割的流水线（人脸/头发/肩部分层蒙版、alpha 修复、边缘精细化）。优先复用 `musetalk/utils/face_detection` 与 `ultralight/face_detect_utils`，并提供 GPU/CPU 两套实现以兼容低配机器。
 
----
+- **3. 视频→视觉模型流水线**: 设计训练流程：帧抽取→关键点对齐→时序增强→训练/微调（wav2lip / musetalk 的 U-Net / VAE 模型）→验证（嘴型同步率/视觉伪影检测）→模型导出（权重+config+version）。产物写入 [models/avatars/] 并注册到元库。
 
-## 3. 技术路线（已确认）
+- **4. 声音克隆流水线**: 明确使用接口（如 `clone_speaker`），实现特征提取（mel, f0）、数据增强（噪声/混响）、训练/微调、导出 speaker embedding 与合成器权重。产物写入 [models/voices/]；提供 `POST /api/v1/voices/{id}:preview` 试听接口。
 
-## 3.1 总体架构
-- 运行时引擎: 复用 `app.py`
-- 控制层: `apps/control_api`（FastAPI）
-- 前端层: `apps/web_admin`
-- 数据层: SQLite `data/meta.db` + 文件资产目录
-- 进程层: control-api 托管 `app.py` 子进程（启停/日志/状态）
+- **5. 模型元数据与兼容性**: 统一模型 schema（name, version, backbone, sample_rate, input_shape, metrics），支持 PyTorch(.pth/.pt)、ONNX(.onnx)、TorchScript 以便不同 runtime 使用。
 
-## 3.2 目录规划
-- `apps/control_api/`: API、任务队列、进程管理、调度器、数据访问
-- `apps/web_admin/`: 本地管理台前端
-- `data/avatars/`: 数字人视频资产
-- `data/voices/`: 声音资产
-- `data/meta.db`: 元数据数据库
+- **6. 产物注册与管理 API**: 在 `apps/control_api` 增加 `POST /api/v1/models/register`、`GET /api/v1/models`、`DELETE /api/v1/models/{id}`，并扩展 `avatars`/`voices` 表字段（model_path, model_version, metrics）。
+
+- **7. 推理服务设计**: 提供可切换 GPU/CPU 的本地推理 runtime（FastAPI 或独立子进程），暴露批量与流式接口：视觉推理（wav2lip/musetalk）、声学合成（xtts）。支持批量队列化与优先级处理（任务中心集成）。
+
+- **8. A/V 同步与延迟控制**: 明确端到端延迟预算（capture→process→render），实现时间戳对齐、帧插值与 playout buffer，在 `apps/control_api/live_runtime.py` 中集成延迟补偿策略。
+
+- **9. 集成与复用现有模块**: 将流水线对接 `wav2lip/`、`musetalk/`、`ultralight/`，并在 `apps/` 增加任务处理器（avatars:train/import/export，voices:train/import/export）。
+
+- **10. 质量评估与自动化回退**: 建立自动化评估套件（嘴型同步 L1/L2、音频合成近似 MOS、视觉伪影检测），不达标自动回退并触发人工审核流程。
+
+- **11. 隐私与合规**: 上传与导出流程加入同意/许可字段；实现模型/数据的访问控制与审计（扩展 `audit_events`），并对导出模型支持可选加密。
+
+- **12. CI/训练自动化与部署**: 提供训练脚本 `scripts/train_avatar.sh` / `scripts/train_voice.sh`、轻量推理镜像 `Dockerfile.inference`，并在 CI 中加入训练/验证阶段的 smoke tests。
+
+- **13. 交付页与用户引导**: 在 `apps/web_admin` 增加“数字人导入/克隆”页面与上传向导；在 `docs/` 添加采集指南（绿幕要求、灯光、麦克风设置）和一键复现示例（从上传到推理）。
+
+**交付优先级建议**
+- P0: 数据规范 + 上传校验 + 绿幕预处理 + 快速试听验收路径（最小可用流程）。
+- P1: 视觉/声音训练流水线 + 模型导出 + 元数据注册 + 推理 API。 
+- P2: 自动评估、ONNX/TorchScript 优化、CI 镜像、桌面集成体验打磨。
 
 ---
 
-## 4. 核心流程（目标态）
-
-## 4.1 视频克隆（wav2lip）
-1. 上传视频素材并提交任务
-2. 后台执行 `wav2lip/genavatar.py`
-3. 失败自动重试，进程中断可恢复
-4. 成功产物落盘并注册 Avatar
-
-## 4.2 声音克隆（xtts）
-1. 上传参考音频并提交克隆任务
-2. 后台调用 XTTS `clone_speaker`
-3. 克隆成功后支持试听（样例文案合成）
-4. 声音参数可配置并保存到 profile
-
-## 4.3 轮播 + 智能回复混合编排
-1. 多轮播计划并发调度
-2. 检测提问后生成回复并进入高优先级队列
-3. 插播优先，结束后继续轮播
-
----
-
-## 5. 接口与数据（现状）
-
-## 5.1 接口
-- [x] 系统状态: `health/capabilities`
-- [x] 资产管理: `avatars/voices` + `:clone`
-- [x] 脚本与轮播: `scripts/playlists` + `playlist_items`
-- [x] 直播控制: `live/sessions` + `live/presets`
-- [x] 消息与回复: `room/messages` + `replies`
-- [x] 任务中心: `jobs` + `job_logs`
-- [x] `POST /api/v1/voices/{voice_id}:preview`（声音试听）
-- [x] `POST /api/v1/platform/messages:ingest`（平台消息标准化接入）
-- [x] jobs 重试状态字段（`retry_count/max_retries/retry_backoff_sec`）已落库
-
-## 5.2 数据表
-- [x] `avatars`
-- [x] `voices`
-- [x] `scripts`
-- [x] `playlists`
-- [x] `playlist_items`
-- [x] `live_presets`
-- [x] `live_sessions`
-- [x] `jobs`
-- [x] `job_logs`
-- [x] `room_messages`
-- [x] `replies`
-- [x] `system_settings`
-- [x] `audit_events`
-- [x] jobs 扩展字段: 重试计数/重试上限/回退秒数/最后错误时间
-- [x] voices 扩展字段: `preview_wav_path`
-- [x] room_messages 扩展字段: `source_msg_id/priority/source_payload_json`
-- [x] replies 扩展字段: `priority`
-
----
-
-## 6. 分阶段计划（去重后）
-
-## Phase 1: MVP（已完成）
-- [x] 控制 API 骨架、数据库初始化、直播启停、基础 CRUD
-- [x] 前端管理台基础框架 + 轮播计划/直播预设管理
-- [x] 异步任务中心 + CORS + 基础联调
-
-## Phase 2: 业务增强（当前进行中）
-- [x] 视频克隆任务失败恢复与自动重试
-- [x] 声音克隆试听与参数化
-- [x] 多轮播计划并发策略
-- [~] 平台消息接入与优先级调度细化（待接各平台官方消息采集器）
-
-## Phase 3: 产品化（进行中）
-- [x] Electron 桌面端基础工程（主进程/预加载/渲染层/本地控制 API 托管）
-- [x] Windows 打包链路（NSIS）与安装体验
-- [x] macOS 打包链路（DMG）与安装体验
-- [~] 代码签名（Windows 证书 / macOS notarization）
-- [~] 自动更新（electron-updater）与版本发布策略
-- [~] 审计/权限/导入导出
-
----
-
-## 8. Electron 桌面版研发清单（Windows + macOS）
-
-### 8.1 架构与目录（第一阶段）
-- [x] 新增 `apps/desktop` 工程目录与基础脚手架
-- [x] 主进程能力: 窗口管理、托盘、生命周期、崩溃恢复
-- [x] 预加载桥接: 仅暴露白名单 IPC（状态/启停/日志/设置）
-- [x] 渲染层容器: 承载现有 `web_admin`，提供桌面状态条与快捷入口
-
-### 8.2 本机运行能力
-- [x] 托管 `control_api` 子进程（启动/停止/重启/状态）
-- [x] Python 解释器路径探测（mac `.venv/bin/python`、windows `.venv\\Scripts\\python.exe`）
-- [x] 本地日志采集与“导出诊断包”
-- [x] 端口占用冲突提示（9001/8010/自定义端口）
-
-### 8.3 可用性与引导
-- [x] 首次启动向导（环境检测/模型检测/XTTS连通）
-- [x] 一键修复建议（缺依赖、端口冲突、模型缺失）
-- [x] 本机模式/云端模式切换（低配机器默认云端）
-
-### 8.4 打包与发布（跨平台）
-- [x] Windows: `electron-builder + NSIS` 出 `exe`
-- [x] macOS: `electron-builder + DMG` 出安装包
-- [x] CI 打包流水线（GitHub Actions: windows-latest + macos-latest）
-- [x] 版本规范与渠道（内测/正式）
-
-### 8.5 安全与发布门槛
-- [~] Windows 代码签名（避免安装拦截）
-- [~] macOS 签名 + notarization（避免“已损坏”提示）
-- [x] 自动更新灰度策略与回滚开关
-
----
-
-## 7. 今日滚动记录
-- [x] 去重并按优先级重排 TODO，明确 Electron 进入产品化阶段
-- [x] 已完成历史交付项同步为基线状态
-- [x] 完成任务失败恢复与自动重试（`jobs` 重启恢复 + 自动回退重试）
-- [x] 完成声音克隆参数化与自动试听（XTTS `tts_stream` 产出 wav）
-- [x] 完成多轮播计划并发调度（不再仅执行第一条计划）
-- [x] 完成消息优先级调度链路（reply/manual/playlist 分级入队）
-- [x] 新增平台消息标准化入口（去重 + 自动生成回复 + 自动入播报队列）
-- [x] 管理台新增“声音试听”“参数化克隆”“平台消息联调”操作入口
-- [x] 管理台 UI 重构为“首页 + 模块化页面”结构，并将编辑从浏览器弹窗改为页面内表单
-- [x] 管理台 UI 二次增强：全局状态芯片、Toast 通知、模块搜索筛选统计、自动刷新与复制ID快捷操作
-- [x] 管理台日志体验增强：实时追踪开关、自动滚动、刷新间隔、关键词过滤、复制/清空视图
-- [x] 形象/声音克隆支持本机文件选择上传（无需手输绝对路径）
-- [x] 任务中心增强：失败原因展示、任务详情抽屉、一键重试
-- [x] 系统体检模块：模型/资产/XTTS/端口可用性开播前检查
-- [x] 直播控制升级为三步开播向导（基础/声音/推流）
-- [x] 上传体验增强：文件大小与格式校验 + 实时上传进度条
-- [x] Electron 第一版骨架已落地：`main/preload/renderer` + 状态栏 + 日志面板 + 嵌入 web_admin
-- [x] Electron 主进程已托管 control_api：支持启动/停止/重启与实时状态同步
-- [x] web_admin 增加桌面桥接：支持桌面端下发 API 地址并自动应用
-- [x] Electron 主进程增强：托盘、崩溃自动恢复、端口冲突检测、设置持久化、诊断包导出
-- [x] Electron 桌面 UI 增强：首次向导、环境体检、local/cloud 模式切换、更新检查、设置导入导出
-- [x] 跨平台打包发布基线：`electron-builder` 配置 + GitHub Actions 工作流 + 发布文档
-- [x] 本机实测打包通过：`npm run dist:mac` 产出 DMG、`npm run dist:win` 产出 EXE
-- [x] 自动更新策略补齐：支持 stable/beta 通道切换 + 更新检查总开关（回滚）  
-- [x] macOS 公证自动化钩子已接入：`afterSign -> apps/desktop/scripts/notarize.js`
-- [x] 发布源企业化配置：`electron-builder.config.js` 支持 GitHub/Generic 发布源与环境变量注入
-- [x] 客户交付文档补齐：新增桌面版客户使用手册（安装/首启/日常/排障）
-- [x] 修复安装版启动路径问题：支持 UI 选择项目目录 + 内置 web_admin 资源兜底
-- [x] 修复更新检查体验：未配置更新源不报堆栈，404/网络错误改为友好提示并缩短顶部文案
-- [x] 修复桌面端中部布局挤压：取消右侧面板等分压缩，日志/设置/体检区恢复正常分区显示
-- [x] 增强版本可见性：桌面首页展示 Desktop 版本号，便于确认是否已安装最新包
+如需，我可将上述每个要点拆成具体实现任务（含目标文件、API 定义与关键脚本），形成可直接执行的 issue/PR 清单并再次写入 `TODO.md`。

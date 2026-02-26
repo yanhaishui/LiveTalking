@@ -73,6 +73,7 @@ const TTS_ENGINE_OPTIONS = [
   { value: "doubao", label: "doubao" },
   { value: "indextts2", label: "indextts2" },
   { value: "azuretts", label: "azuretts" },
+  { value: "elevenlabs", label: "elevenlabs" },
 ];
 
 const STATIC_REF_FILE_OPTIONS = {
@@ -84,6 +85,7 @@ const STATIC_REF_FILE_OPTIONS = {
   doubao: ["doubao_default"],
   tencent: ["101001"],
   indextts2: ["index_default"],
+  elevenlabs: ["21m00Tcm4TlvDq8ikWAM", "EXAVITQu4vr4xnSDxMaL"],
 };
 
 const STATIC_REF_TEXT_OPTIONS = {
@@ -94,6 +96,7 @@ const STATIC_REF_TEXT_OPTIONS = {
 
 const LOG_POLL_INTERVAL_OPTIONS = [1000, 1500, 3000, 5000];
 const BJT_TIMEZONE = "Asia/Shanghai";
+const SCRIPT_CONTENT_MAX_CHARS = 200000;
 
 function byId(id) {
   return document.getElementById(id);
@@ -301,28 +304,59 @@ function parseOptionalNumber(raw, asInt = false) {
   return asInt ? Math.floor(num) : num;
 }
 
-function extractPushUrl(extraArgs) {
+function updateLengthHint(inputId, hintId, limit) {
+  const input = byId(inputId);
+  const hint = byId(hintId);
+  if (!input || !hint) return;
+
+  const len = String(input.value || "").trim().length;
+  const left = Math.max(0, limit - len);
+  hint.textContent = `${len} / ${limit} 字（剩余 ${left}）`;
+  hint.style.color = len > limit ? "#c1121f" : "";
+}
+
+function bindLengthHint(inputId, hintId, limit) {
+  const input = byId(inputId);
+  if (!input) return;
+  const refresh = () => updateLengthHint(inputId, hintId, limit);
+  input.addEventListener("input", refresh);
+  refresh();
+}
+
+function extractArgValue(extraArgs, key) {
   if (!Array.isArray(extraArgs)) return "";
   for (let i = 0; i < extraArgs.length; i += 1) {
-    if (String(extraArgs[i]) === "--push_url" && i + 1 < extraArgs.length) {
+    if (String(extraArgs[i]) === key && i + 1 < extraArgs.length) {
       return String(extraArgs[i + 1] || "");
     }
   }
   return "";
 }
 
-function mergeExtraArgsPushUrl(extraArgs, pushUrl) {
+function extractPushUrl(extraArgs) {
+  return extractArgValue(extraArgs, "--push_url");
+}
+
+function extractTtsRate(extraArgs) {
+  return extractArgValue(extraArgs, "--TTS_RATE");
+}
+
+function mergeExtraArgs(extraArgs, options = {}) {
   const src = Array.isArray(extraArgs) ? extraArgs : [];
+  const pushUrl = String(options.pushUrl || "").trim();
+  const ttsRate = String(options.ttsRate || "").trim();
+  const removeKeys = new Set(["--push_url", "--TTS_RATE"]);
   const out = [];
   for (let i = 0; i < src.length; i += 1) {
     const token = String(src[i]);
-    if (token === "--push_url") {
+    if (removeKeys.has(token)) {
       i += 1;
       continue;
     }
     out.push(token);
   }
   if (pushUrl) out.push("--push_url", pushUrl);
+  if (ttsRate) out.push("--TTS_RATE", ttsRate);
   return out;
 }
 
@@ -704,6 +738,7 @@ function updateLiveWizardSummary() {
     ref_file: byId("liveRefFile")?.value || "",
     ref_text: byId("liveRefText")?.value || "",
     tts_server: byId("liveTtsServer")?.value || "",
+    tts_rate: byId("liveTtsRate")?.value || "+0%",
     push_url: byId("livePushUrl")?.value || "",
   };
   el.textContent = JSON.stringify(data, null, 2);
@@ -1077,6 +1112,7 @@ function openScriptEditor(id) {
   byId("scriptEditPriority").value = String(row.priority ?? 0);
   byId("scriptEditEnabled").value = Number(row.enabled) === 1 || row.enabled === true ? "true" : "false";
   byId("scriptEditContent").value = row.content || "";
+  updateLengthHint("scriptEditContent", "scriptEditContentMeta", SCRIPT_CONTENT_MAX_CHARS);
   showPage("scripts");
 }
 
@@ -1109,6 +1145,7 @@ function openPresetEditor(id) {
   byId("presetEditRefFile").value = row.ref_file || "";
   byId("presetEditRefText").value = row.ref_text || "";
   byId("presetEditTtsServer").value = row.tts_server || "";
+  byId("presetEditTtsRate").value = extractTtsRate(row.extra_args) || "+0%";
   byId("presetEditPushUrl").value = extractPushUrl(row.extra_args);
   showPage("presets");
 }
@@ -1319,6 +1356,7 @@ function setupLiveWizard() {
     "liveRefFile",
     "liveRefText",
     "liveTtsServer",
+    "liveTtsRate",
     "livePushUrl",
   ].forEach((id) => {
     const el = byId(id);
@@ -1377,6 +1415,8 @@ function bindEvents() {
   setupLogViewerControls();
   setupLiveWizard();
   setupAutoRefresh();
+  bindLengthHint("scriptContent", "scriptContentMeta", SCRIPT_CONTENT_MAX_CHARS);
+  bindLengthHint("scriptEditContent", "scriptEditContentMeta", SCRIPT_CONTENT_MAX_CHARS);
 
   byId("avatarVideoFile").addEventListener("change", () => {
     const file = byId("avatarVideoFile").files?.[0] || null;
@@ -1484,7 +1524,10 @@ function bindEvents() {
       ref_file: byId("liveRefFile").value || null,
       ref_text: byId("liveRefText").value || null,
       tts_server: byId("liveTtsServer").value.trim() || null,
-      extra_args: mergeExtraArgsPushUrl([], byId("livePushUrl").value.trim()),
+      extra_args: mergeExtraArgs([], {
+        pushUrl: byId("livePushUrl").value.trim(),
+        ttsRate: byId("liveTtsRate").value || "+0%",
+      }),
     };
     try {
       const result = await request("/api/v1/live/sessions:start", {
@@ -1752,10 +1795,15 @@ function bindEvents() {
       priority: 0,
       enabled: true,
     };
+    if (payload.content.length > SCRIPT_CONTENT_MAX_CHARS) {
+      notify(`脚本内容超长，最多 ${SCRIPT_CONTENT_MAX_CHARS} 字`, "warn");
+      return;
+    }
 
     try {
       await request("/api/v1/scripts", { method: "POST", body: JSON.stringify(payload) });
       byId("scriptForm").reset();
+      updateLengthHint("scriptContent", "scriptContentMeta", SCRIPT_CONTENT_MAX_CHARS);
       await Promise.all([loadScripts(), loadPlaylists()]);
       notify("脚本已新增", "ok");
     } catch (err) {
@@ -1777,6 +1825,10 @@ function bindEvents() {
       priority: Number(byId("scriptEditPriority").value || 0),
       enabled: byId("scriptEditEnabled").value === "true",
     };
+    if (payload.content.length > SCRIPT_CONTENT_MAX_CHARS) {
+      notify(`脚本内容超长，最多 ${SCRIPT_CONTENT_MAX_CHARS} 字`, "warn");
+      return;
+    }
 
     try {
       await request(`/api/v1/scripts/${state.editing.scriptId}`, {
@@ -1793,6 +1845,7 @@ function bindEvents() {
   byId("scriptEditCancel").addEventListener("click", () => {
     state.editing.scriptId = null;
     byId("scriptEditForm").reset();
+    updateLengthHint("scriptEditContent", "scriptEditContentMeta", SCRIPT_CONTENT_MAX_CHARS);
   });
 
   byId("playlistForm").addEventListener("submit", async (e) => {
@@ -1887,7 +1940,10 @@ function bindEvents() {
       tts_server: byId("presetTtsServer").value.trim() || null,
       ref_file: byId("presetRefFile").value || null,
       ref_text: byId("presetRefText").value || null,
-      extra_args: mergeExtraArgsPushUrl([], byId("presetPushUrl").value.trim()),
+      extra_args: mergeExtraArgs([], {
+        pushUrl: byId("presetPushUrl").value.trim(),
+        ttsRate: byId("presetTtsRate").value || "+0%",
+      }),
     };
 
     if (!payload.avatar_id) {
@@ -1902,6 +1958,7 @@ function bindEvents() {
       byId("presetModel").value = "wav2lip";
       byId("presetTransport").value = "virtualcam";
       byId("presetTts").value = "";
+      byId("presetTtsRate").value = "+0%";
       refreshRefOptions("preset");
       await loadPresets();
       notify("直播预设已新增", "ok");
@@ -1928,7 +1985,10 @@ function bindEvents() {
       tts_server: byId("presetEditTtsServer").value.trim() || null,
       ref_file: byId("presetEditRefFile").value || null,
       ref_text: byId("presetEditRefText").value || null,
-      extra_args: mergeExtraArgsPushUrl([], byId("presetEditPushUrl").value.trim()),
+      extra_args: mergeExtraArgs([], {
+        pushUrl: byId("presetEditPushUrl").value.trim(),
+        ttsRate: byId("presetEditTtsRate").value || "+0%",
+      }),
     };
 
     try {
@@ -1962,7 +2022,7 @@ function bindEvents() {
     }
 
     try {
-      await request("/api/v1/live/speaker/say", {
+      const result = await request("/api/v1/live/speaker/say", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -1970,7 +2030,8 @@ function bindEvents() {
       byId("speakerSayInterrupt").value = "false";
       byId("speakerSayPriority").value = "60";
       await loadSpeakerStatus();
-      notify("播报任务已入队", "ok");
+      const segCount = Number(result?.segment_count || 1);
+      notify(`播报任务已入队（${segCount} 段）`, "ok");
     } catch (err) {
       notify(`播报入队失败: ${err.message}`, "error");
     }

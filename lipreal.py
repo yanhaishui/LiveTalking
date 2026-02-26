@@ -48,11 +48,14 @@ device = "cuda" if torch.cuda.is_available() else ("mps" if (hasattr(torch.backe
 print('Using {} for inference.'.format(device))
 
 def _load(checkpoint_path):
-	if device == 'cuda':
-		checkpoint = torch.load(checkpoint_path) #,weights_only=True
-	else:
-		checkpoint = torch.load(checkpoint_path,
-								map_location=lambda storage, loc: storage)
+	load_kwargs = {}
+	if device != 'cuda':
+		load_kwargs["map_location"] = (lambda storage, loc: storage)
+	try:
+		checkpoint = torch.load(checkpoint_path, weights_only=True, **load_kwargs)
+	except TypeError:
+		# Backward compatibility for older torch without weights_only.
+		checkpoint = torch.load(checkpoint_path, **load_kwargs)
 	return checkpoint
 
 def load_model(path):

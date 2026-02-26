@@ -23,6 +23,9 @@ cd /Users/yanhaishui/IdeaProjects/jhipster/LiveTalking/apps/desktop
 npm install
 npm run dev
 ```
+### 如果Windows环境报错，可以提升Windows Shell权限：
+ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+ Get-ExecutionPolicy -List
 
 ## 可选环境变量
 - `LIVETALKING_REPO_ROOT`: 指定 LiveTalking 仓库根目录

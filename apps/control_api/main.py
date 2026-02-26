@@ -1003,8 +1003,38 @@ def _build_command(opts: dict[str, object]) -> list[str]:
         cmd.extend(["--REF_TEXT", str(opts["ref_text"])])
 
     extra_args = opts.get("extra_args") or []
-    for arg in extra_args:
-        cmd.append(str(arg))
+    normalized_extra_args = [str(x) for x in extra_args if x is not None]
+    i = 0
+    while i < len(normalized_extra_args):
+        token = str(normalized_extra_args[i]).strip()
+        if not token:
+            i += 1
+            continue
+
+        # TTS_RATE may be negative like "-25%"; use --key=value to prevent argparse
+        # from treating it as another option.
+        if token == "--TTS_RATE":
+            if i + 1 >= len(normalized_extra_args):
+                i += 1
+                continue
+            value = str(normalized_extra_args[i + 1]).strip()
+            if value:
+                cmd.append(f"--TTS_RATE={value}")
+            i += 2
+            continue
+
+        if token == "--push_url":
+            if i + 1 >= len(normalized_extra_args):
+                i += 1
+                continue
+            value = str(normalized_extra_args[i + 1]).strip()
+            if value:
+                cmd.extend(["--push_url", value])
+            i += 2
+            continue
+
+        cmd.append(token)
+        i += 1
 
     return cmd
 
@@ -1363,12 +1393,24 @@ def speaker_status() -> dict[str, object]:
 def speaker_say(payload: ManualSpeakRequest) -> dict[str, object]:
     """手工追加一条播报任务。"""
 
-    task_id = speaker_dispatcher.enqueue_manual(
+    result = speaker_dispatcher.enqueue_manual_detail(
         payload.text,
         interrupt=payload.interrupt,
         priority=payload.priority,
     )
-    return {"task_id": task_id, "status": "queued", "priority": payload.priority}
+    task_id = str(result.get("task_id") or "")
+    if not task_id:
+        raise HTTPException(status_code=400, detail="文本为空或无法分段")
+
+    return {
+        "task_id": task_id,
+        "status": "queued",
+        "priority": payload.priority,
+        "segment_count": int(result.get("segment_count") or 1),
+        "char_count": int(result.get("char_count") or 0),
+        "segment_max_chars": int(result.get("segment_max_chars") or 0),
+        "text_trimmed": bool(result.get("text_trimmed")),
+    }
 
 
 # =========================

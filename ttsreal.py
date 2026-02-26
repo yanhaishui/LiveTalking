@@ -28,6 +28,7 @@ import hashlib
 import base64
 import json
 import uuid
+import socket
 
 from typing import Iterator
 
@@ -68,9 +69,49 @@ class BaseTTS:
         self.msgqueue.queue.clear()
         self.state = State.PAUSE
 
+    def _split_text_by_chars(self, text: str, max_chars: int) -> list[str]:
+        if max_chars <= 0 or len(text) <= max_chars:
+            return [text]
+        punct = set("。！？!?；;，,\n")
+        chunks: list[str] = []
+        buf = ""
+        soft_break = max(8, max_chars // 2)
+        for ch in text:
+            buf += ch
+            if len(buf) >= max_chars:
+                chunks.append(buf.strip())
+                buf = ""
+                continue
+            if ch in punct and len(buf) >= soft_break:
+                chunks.append(buf.strip())
+                buf = ""
+        if buf.strip():
+            chunks.append(buf.strip())
+        return [c for c in chunks if c]
+
     def put_msg_txt(self,msg:str,datainfo:dict={}): 
-        if len(msg)>0:
-            self.msgqueue.put((msg,datainfo))
+        text = str(msg or "").strip()
+        if not text:
+            return
+        max_chars = os.getenv("LT_TTS_MAX_CHARS", "70").strip()
+        try:
+            max_chars = int(max_chars)
+        except ValueError:
+            max_chars = 70
+        chunks = self._split_text_by_chars(text, max_chars)
+        if len(chunks) > 1:
+            logger.warning(
+                "tts input too long: %d chars, split into %d chunks (max_chars=%d).",
+                len(text),
+                len(chunks),
+                max_chars,
+            )
+        for idx, chunk_text in enumerate(chunks):
+            preview = chunk_text.replace("\r", " ").replace("\n", " ")
+            if len(preview) > 80:
+                preview = preview[:80] + "..."
+            logger.info("tts enqueue chars=%d part=%d/%d preview=%s", len(chunk_text), idx + 1, len(chunks), preview)
+            self.msgqueue.put((chunk_text, dict(datainfo)))
 
     def render(self,quit_event):
         process_thread = Thread(target=self.process_tts, args=(quit_event,))
@@ -92,18 +133,136 @@ class BaseTTS:
 
 ###########################################################################################
 class EdgeTTS(BaseTTS):
+    def _normalize_rate(self, raw: str | None) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return "+0%"
+
+        lower = text.lower()
+        if lower in {"slow", "slower", "slowly", "慢", "慢速"}:
+            return "-25%"
+        if lower in {"normal", "default", "normal_speed", "标准", "正常"}:
+            return "+0%"
+        if lower in {"fast", "faster", "快", "快速"}:
+            return "+25%"
+
+        if text.endswith("%"):
+            num_text = text[:-1].strip()
+            if num_text.startswith("+"):
+                num_text = num_text[1:]
+            try:
+                num = int(float(num_text))
+                num = max(-80, min(80, num))
+                return f"{num:+d}%"
+            except ValueError:
+                pass
+        return "+0%"
+
+    def _is_local_port_open(self, port: int, timeout_sec: float = 0.25) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout_sec):
+                return True
+        except Exception:
+            return False
+
+    def _build_proxy_candidates(self) -> list[str | None]:
+        candidates: list[str | None] = []
+        explicit_proxy = os.getenv("EDGE_TTS_PROXY", "").strip()
+        prefer_direct = os.getenv("EDGE_TTS_PREFER_DIRECT", "1").strip() not in {"0", "false", "False"}
+
+        if prefer_direct:
+            candidates.append(None)
+        if explicit_proxy and explicit_proxy not in candidates:
+            candidates.append(explicit_proxy)
+
+        auto_proxy_enabled = os.getenv("EDGE_TTS_AUTO_PROXY", "1").strip() not in {"0", "false", "False"}
+        if auto_proxy_enabled:
+            ports_env = os.getenv("EDGE_TTS_PROXY_PORTS", "7897,7890,10809,1080")
+            for raw in ports_env.split(","):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    port = int(raw)
+                except ValueError:
+                    continue
+                proxy = f"http://127.0.0.1:{port}"
+                if proxy in candidates:
+                    continue
+                if self._is_local_port_open(port):
+                    candidates.append(proxy)
+
+        if not prefer_direct and None not in candidates:
+            candidates.append(None)
+        return candidates
+
     def txt_to_audio(self,msg:tuple[str, dict]):
         voicename = self.opt.REF_FILE #"zh-CN-YunxiaNeural"
         text,textevent = msg
-        t = time.time()
-        asyncio.new_event_loop().run_until_complete(self.__main(voicename,text))
-        logger.info(f'-------edge tts time:{time.time()-t:.4f}s')
-        if self.input_stream.getbuffer().nbytes<=0: #edgetts err
+        text_len = len((text or "").strip())
+        tts_rate = self._normalize_rate(getattr(self.opt, "TTS_RATE", "+0%"))
+        proxies = self._build_proxy_candidates()
+        max_retries = max(1, int(os.getenv("EDGE_TTS_RETRIES", "5")))
+        attempt_timeout = float(os.getenv("EDGE_TTS_ATTEMPT_TIMEOUT_SEC", "12"))
+        max_audio_seconds = max(3.0, float(os.getenv("EDGE_TTS_MAX_AUDIO_SECONDS", "20")))
+        stream = None
+        logger.info("edgetts request chars=%d rate=%s", text_len, tts_rate)
+        for attempt in range(1, max_retries + 1):
+            proxy = proxies[(attempt - 1) % len(proxies)]
+            route = proxy if proxy else "direct"
+            self.input_stream.seek(0)
+            self.input_stream.truncate()
+            t = time.time()
+            timed_out = False
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(
+                    asyncio.wait_for(self.__main(voicename, text, proxy, tts_rate), timeout=attempt_timeout)
+                )
+            except asyncio.TimeoutError:
+                timed_out = True
+                logger.warning(
+                    "edgetts attempt timeout after %.1fs (attempt %d/%d, route=%s)",
+                    attempt_timeout,
+                    attempt,
+                    max_retries,
+                    route,
+                )
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+            logger.info(f'-------edge tts time:{time.time()-t:.4f}s (attempt {attempt}/{max_retries}, route={route})')
+            if timed_out:
+                continue
+            if self.input_stream.getbuffer().nbytes <= 0:
+                if attempt < max_retries:
+                    logger.warning(f'edgetts returned empty audio, retrying ({attempt}/{max_retries}, route={route})')
+                    time.sleep(0.3)
+                continue
+
+            self.input_stream.seek(0)
+            candidate_stream = self.__create_bytes_stream(self.input_stream)
+            if candidate_stream.shape[0] <= 0:
+                logger.warning("edgetts decoded empty pcm, retrying (%d/%d, route=%s)", attempt, max_retries, route)
+                continue
+            audio_seconds = candidate_stream.shape[0] / float(self.sample_rate)
+            if audio_seconds > max_audio_seconds:
+                logger.warning(
+                    "edgetts decoded audio too long %.2fs; trim to %.1fs to avoid queue flood.",
+                    audio_seconds,
+                    max_audio_seconds,
+                )
+                keep_samples = int(max_audio_seconds * self.sample_rate)
+                candidate_stream = candidate_stream[:keep_samples]
+            stream = candidate_stream
+            break
+
+        if stream is None: #edgetts err
             logger.error('edgetts err!!!!!')
             return
-        
-        self.input_stream.seek(0)
-        stream = self.__create_bytes_stream(self.input_stream)
+
         streamlen = stream.shape[0]
         idx=0
         while streamlen >= self.chunk and self.state==State.RUNNING:
@@ -138,9 +297,9 @@ class EdgeTTS(BaseTTS):
 
         return stream
     
-    async def __main(self,voicename: str, text: str):
+    async def __main(self,voicename: str, text: str, proxy: str | None = None, rate: str = "+0%"):
         try:
-            communicate = edge_tts.Communicate(text, voicename)
+            communicate = edge_tts.Communicate(text, voicename, proxy=proxy, rate=rate)
 
             #with open(OUTPUT_FILE, "wb") as file:
             first = True
@@ -153,6 +312,8 @@ class EdgeTTS(BaseTTS):
                     #file.write(chunk["data"])
                 elif chunk["type"] == "WordBoundary":
                     pass
+        except edge_tts.exceptions.NoAudioReceived:
+            logger.warning('edgetts NoAudioReceived')
         except Exception as e:
             logger.exception('edgetts')
 
@@ -928,6 +1089,85 @@ class XTTS(BaseTTS):
         eventpoint={'status':'end','text':text}
         eventpoint.update(**textevent) 
         self.parent.put_audio_frame(np.zeros(self.chunk,np.float32),eventpoint)  
+
+###########################################################################################
+class ElevenLabsTTS(BaseTTS):
+    def txt_to_audio(self, msg: tuple[str, dict]):
+        text, textevent = msg
+        voice_id = str(self.opt.REF_FILE or os.getenv("ELEVENLABS_VOICE_ID", "")).strip()
+        api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+        base_url = (
+            os.getenv("ELEVENLABS_API_BASE", "").strip()
+            or str(self.opt.TTS_SERVER or "https://api.elevenlabs.io").strip()
+        ).rstrip("/")
+        model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2").strip() or "eleven_multilingual_v2"
+        output_format = os.getenv("ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128").strip() or "mp3_44100_128"
+
+        if not api_key:
+            logger.error("elevenlabs err!!!!! missing ELEVENLABS_API_KEY")
+            return
+        if not voice_id:
+            logger.error("elevenlabs err!!!!! missing voice id (set REF_FILE or ELEVENLABS_VOICE_ID)")
+            return
+
+        t = time.time()
+        try:
+            resp = requests.post(
+                f"{base_url}/v1/text-to-speech/{voice_id}",
+                params={"output_format": output_format},
+                json={"text": text, "model_id": model_id},
+                headers={
+                    "xi-api-key": api_key,
+                    "Accept": "audio/mpeg",
+                    "Content-Type": "application/json",
+                },
+                timeout=(5, 45),
+            )
+        except Exception:
+            logger.exception("elevenlabs")
+            return
+
+        if resp.status_code >= 400:
+            body_preview = (resp.text or "")[:240]
+            logger.error(f"elevenlabs http {resp.status_code}: {body_preview}")
+            return
+        if not resp.content:
+            logger.error("elevenlabs err!!!!! empty audio")
+            return
+
+        logger.info(f"-------elevenlabs tts time:{time.time()-t:.4f}s")
+        stream = self.__create_bytes_stream(BytesIO(resp.content))
+        streamlen = stream.shape[0]
+        if streamlen < self.chunk:
+            logger.error("elevenlabs err!!!!! decoded audio too short")
+            return
+
+        idx = 0
+        while streamlen >= self.chunk and self.state == State.RUNNING:
+            eventpoint = {}
+            streamlen -= self.chunk
+            if idx == 0:
+                eventpoint = {"status": "start", "text": text}
+                eventpoint.update(**textevent)
+            elif streamlen < self.chunk:
+                eventpoint = {"status": "end", "text": text}
+                eventpoint.update(**textevent)
+            self.parent.put_audio_frame(stream[idx:idx + self.chunk], eventpoint)
+            idx += self.chunk
+
+    def __create_bytes_stream(self, byte_stream):
+        stream, sample_rate = sf.read(byte_stream)  # [T*sample_rate,] float64
+        logger.info(f'[INFO]tts audio stream {sample_rate}: {stream.shape}')
+        stream = stream.astype(np.float32)
+
+        if stream.ndim > 1:
+            logger.info(f'[WARN] audio has {stream.shape[1]} channels, only use the first.')
+            stream = stream[:, 0]
+
+        if sample_rate != self.sample_rate and stream.shape[0] > 0:
+            logger.info(f'[WARN] audio sample rate is {sample_rate}, resampling into {self.sample_rate}.')
+            stream = resampy.resample(x=stream, sr_orig=sample_rate, sr_new=self.sample_rate)
+        return stream
 
 ###########################################################################################
 class AzureTTS(BaseTTS):

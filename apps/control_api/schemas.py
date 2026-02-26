@@ -5,6 +5,9 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from typing import Any
 
+MAX_SCRIPT_CONTENT_CHARS = 200000
+MAX_MANUAL_SPEAK_CHARS = 200000
+
 
 class ApiMessage(BaseModel):
     """通用消息响应。"""
@@ -105,7 +108,7 @@ class ScriptCreate(BaseModel):
     """新建脚本请求。"""
 
     title: str = Field(..., min_length=1, max_length=200)
-    content: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1, max_length=MAX_SCRIPT_CONTENT_CHARS)
     category: str | None = None
     priority: int = 0
     enabled: bool = True
@@ -115,7 +118,7 @@ class ScriptUpdate(BaseModel):
     """更新脚本请求。"""
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
-    content: str | None = Field(default=None, min_length=1)
+    content: str | None = Field(default=None, min_length=1, max_length=MAX_SCRIPT_CONTENT_CHARS)
     category: str | None = None
     priority: int | None = None
     enabled: bool | None = None
@@ -265,7 +268,7 @@ class ReplySpeakRequest(BaseModel):
 class ManualSpeakRequest(BaseModel):
     """手工播报请求（用于联调或运营干预）。"""
 
-    text: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=MAX_MANUAL_SPEAK_CHARS)
     interrupt: bool = False
     priority: int = Field(default=60, ge=0, le=100)
 

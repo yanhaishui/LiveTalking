@@ -168,6 +168,7 @@
                   模型
                   <select id="liveModel">
                     <option value="wav2lip">wav2lip</option>
+                    <option value="musetalk">musetalk</option>
                   </select>
                 </label>
                 <label>
@@ -202,6 +203,14 @@
                 <label>
                   REF_TEXT（可选）
                   <select id="liveRefText"></select>
+                </label>
+                <label>
+                  语速档位
+                  <select id="liveTtsRate">
+                    <option value="-25%">慢速</option>
+                    <option value="+0%" selected>正常</option>
+                    <option value="+25%">快速</option>
+                  </select>
                 </label>
               </div>
             </div>
@@ -452,6 +461,7 @@
               <label>标题<input id="scriptTitle" required /></label>
               <label>分类<input id="scriptCategory" placeholder="产品介绍 / 公司介绍" /></label>
               <label>内容<textarea id="scriptContent" rows="5" required></textarea></label>
+              <div id="scriptContentMeta" class="field-hint">0 / 200000 字</div>
               <div class="form-actions"><button type="submit" class="btn">新增脚本</button></div>
             </form>
           </div>
@@ -465,6 +475,7 @@
               <label>优先级<input id="scriptEditPriority" type="number" /></label>
               <label>是否启用<select id="scriptEditEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
               <label>内容<textarea id="scriptEditContent" rows="5" required></textarea></label>
+              <div id="scriptEditContentMeta" class="field-hint">0 / 200000 字</div>
               <div class="form-actions">
                 <button type="submit" class="btn">保存修改</button>
                 <button type="button" id="scriptEditCancel" class="btn ghost">取消</button>
@@ -591,13 +602,14 @@
               <label>预设名称<input id="presetName" required /></label>
               <label>Avatar<select id="presetAvatarId"></select></label>
               <label>Voice（可选）<select id="presetVoiceId"></select></label>
-              <label>模型<select id="presetModel"><option value="wav2lip">wav2lip</option></select></label>
+              <label>模型<select id="presetModel"><option value="wav2lip">wav2lip</option><option value="musetalk">musetalk</option></select></label>
               <label>传输<select id="presetTransport"><option value="virtualcam">virtualcam</option><option value="webrtc">webrtc</option><option value="rtcpush">rtcpush</option></select></label>
               <label>端口<input id="presetListenPort" type="number" min="1" max="65535" value="8010" /></label>
               <label>TTS 引擎<select id="presetTts"></select></label>
               <label>TTS_SERVER<input id="presetTtsServer" placeholder="http://127.0.0.1:9000" /></label>
               <label>REF_FILE<select id="presetRefFile"></select></label>
               <label>REF_TEXT<select id="presetRefText"></select></label>
+              <label>语速档位<select id="presetTtsRate"><option value="-25%">慢速</option><option value="+0%" selected>正常</option><option value="+25%">快速</option></select></label>
               <label>push_url（仅 rtcpush）<input id="presetPushUrl" placeholder="http://localhost:1985/rtc/v1/whip/?app=live&stream=livestream" /></label>
               <div class="form-actions"><button type="submit" class="btn">新增预设</button></div>
             </form>
@@ -610,13 +622,14 @@
               <label>预设名称<input id="presetEditName" required /></label>
               <label>Avatar<select id="presetEditAvatarId"></select></label>
               <label>Voice（可选）<select id="presetEditVoiceId"></select></label>
-              <label>模型<select id="presetEditModel"><option value="wav2lip">wav2lip</option></select></label>
+              <label>模型<select id="presetEditModel"><option value="wav2lip">wav2lip</option><option value="musetalk">musetalk</option></select></label>
               <label>传输<select id="presetEditTransport"><option value="virtualcam">virtualcam</option><option value="webrtc">webrtc</option><option value="rtcpush">rtcpush</option></select></label>
               <label>端口<input id="presetEditListenPort" type="number" min="1" max="65535" /></label>
               <label>TTS 引擎<select id="presetEditTts"></select></label>
               <label>TTS_SERVER<input id="presetEditTtsServer" /></label>
               <label>REF_FILE<select id="presetEditRefFile"></select></label>
               <label>REF_TEXT<select id="presetEditRefText"></select></label>
+              <label>语速档位<select id="presetEditTtsRate"><option value="-25%">慢速</option><option value="+0%" selected>正常</option><option value="+25%">快速</option></select></label>
               <label>push_url（仅 rtcpush）<input id="presetEditPushUrl" /></label>
               <div class="form-actions">
                 <button type="submit" class="btn">保存修改</button>

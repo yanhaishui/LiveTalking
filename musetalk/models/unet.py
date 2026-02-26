@@ -41,7 +41,14 @@ class UNet():
             self.device = device
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        weights = torch.load(model_path) if torch.cuda.is_available() else torch.load(model_path, map_location=self.device)
+        load_kwargs = {}
+        if not torch.cuda.is_available():
+            load_kwargs["map_location"] = self.device
+        try:
+            weights = torch.load(model_path, weights_only=True, **load_kwargs)
+        except TypeError:
+            # Backward compatibility for older torch without weights_only.
+            weights = torch.load(model_path, **load_kwargs)
         self.model.load_state_dict(weights)
         if use_float16:
             self.model = self.model.half()
