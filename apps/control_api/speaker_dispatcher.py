@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
 import random
 import threading
 import time
@@ -55,6 +56,58 @@ class SpeakerDispatcher:
         self._sequence = 0
         self._worker: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._segment_max_chars = self._read_env_int(
+            "LT_SPEAKER_SEGMENT_MAX_CHARS",
+            default=70,
+            min_value=40,
+            max_value=2000,
+        )
+        self._max_text_chars = self._read_env_int(
+            "LT_SPEAKER_MAX_TEXT_CHARS",
+            default=200000,
+            min_value=1000,
+            max_value=2000000,
+        )
+        self._dispatch_guard_sec = self._read_env_float(
+            "LT_SPEAKER_DISPATCH_GUARD_SEC",
+            default=1.2,
+            min_value=0.0,
+            max_value=20.0,
+        )
+        self._dispatch_guard_per_char = self._read_env_float(
+            "LT_SPEAKER_DISPATCH_GUARD_PER_CHAR",
+            default=0.05,
+            min_value=0.0,
+            max_value=1.0,
+        )
+        self._dispatch_guard_musetalk_sec = self._read_env_float(
+            "LT_SPEAKER_MUSETALK_GUARD_SEC",
+            default=4.0,
+            min_value=0.0,
+            max_value=60.0,
+        )
+        self._dispatch_guard_musetalk_per_char = self._read_env_float(
+            "LT_SPEAKER_MUSETALK_GUARD_PER_CHAR",
+            default=0.16,
+            min_value=0.0,
+            max_value=2.0,
+        )
+        self._prefetch_while_speaking_mode = (
+            os.getenv("LT_SPEAKER_PREFETCH_WHILE_SPEAKING", "auto").strip().lower()
+        )
+        if self._prefetch_while_speaking_mode not in {
+            "auto",
+            "on",
+            "off",
+            "1",
+            "0",
+            "true",
+            "false",
+            "yes",
+            "no",
+        }:
+            self._prefetch_while_speaking_mode = "auto"
+        self._next_dispatch_ts = 0.0
 
         # 轮播调度状态。
         self._playlist_cursor: dict[str, int] = {}
@@ -110,11 +163,23 @@ class SpeakerDispatcher:
             "last_event": self._last_event,
             "last_error": self._last_error,
             "last_dispatch_at": self._last_dispatch_at,
+            "segment_config": {
+                "segment_max_chars": self._segment_max_chars,
+                "max_text_chars": self._max_text_chars,
+                "dispatch_guard_sec": self._dispatch_guard_sec,
+                "dispatch_guard_per_char": self._dispatch_guard_per_char,
+                "dispatch_guard_musetalk_sec": self._dispatch_guard_musetalk_sec,
+                "dispatch_guard_musetalk_per_char": self._dispatch_guard_musetalk_per_char,
+                "prefetch_while_speaking": self._prefetch_while_speaking_mode,
+            },
             "live": {
                 "running": live.get("running"),
                 "session_id": live.get("session_id"),
                 "transport": endpoint.get("transport"),
                 "listen_port": endpoint.get("listen_port"),
+                "model": endpoint.get("model"),
+                "tts": endpoint.get("tts"),
+                "tts_rate": endpoint.get("tts_rate"),
                 "supported": endpoint.get("supported"),
                 "reason": endpoint.get("reason"),
             },
@@ -123,29 +188,220 @@ class SpeakerDispatcher:
     def enqueue_reply(self, reply_id: str, text: str, interrupt: bool = True, priority: int = 80) -> str:
         """加入一条回复播报任务。"""
 
-        task = SpeakTask(
-            task_id=f"speak_{uuid.uuid4().hex[:12]}",
+        result = self._enqueue_text_task(
+            task_prefix="speak",
             source="reply",
             text=text,
-            priority=max(0, min(100, int(priority))),
+            priority=priority,
             interrupt=interrupt,
             meta={"reply_id": reply_id},
         )
-        self._append_task(task)
-        return task.task_id
+        return str(result.get("task_id") or "")
 
     def enqueue_manual(self, text: str, interrupt: bool = False, priority: int = 60) -> str:
         """加入一条手工播报任务（用于联调/运维）。"""
 
-        task = SpeakTask(
-            task_id=f"manual_{uuid.uuid4().hex[:12]}",
+        detail = self.enqueue_manual_detail(text=text, interrupt=interrupt, priority=priority)
+        return str(detail.get("task_id") or "")
+
+    def enqueue_manual_detail(self, text: str, interrupt: bool = False, priority: int = 60) -> dict[str, Any]:
+        """加入一条手工播报任务，并返回分段信息。"""
+
+        return self._enqueue_text_task(
+            task_prefix="manual",
             source="manual",
             text=text,
+            priority=priority,
+            interrupt=interrupt,
+            meta={},
+        )
+
+    def _read_env_int(self, key: str, default: int, min_value: int, max_value: int) -> int:
+        raw = os.getenv(key, str(default)).strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = default
+        return max(min_value, min(max_value, value))
+
+    def _read_env_float(self, key: str, default: float, min_value: float, max_value: float) -> float:
+        raw = os.getenv(key, str(default)).strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            value = float(default)
+        return max(min_value, min(max_value, value))
+
+    def _edge_rate_factor(self, rate_text: str | None) -> float:
+        rate = str(rate_text or "").strip()
+        if not rate.endswith("%"):
+            return 1.0
+        try:
+            num = float(rate[:-1].strip())
+        except ValueError:
+            return 1.0
+        factor = 1.0 + (num / 100.0)
+        return max(0.35, min(2.0, factor))
+
+    def _compute_dispatch_guard(self, task: SpeakTask, endpoint: dict[str, Any]) -> float:
+        model_name = str(endpoint.get("model") or "").lower()
+        tts_name = str(endpoint.get("tts") or "").lower()
+        text_len = len(str(task.text or "").strip())
+        if text_len <= 0:
+            return 0.0
+
+        if model_name == "musetalk":
+            guard = self._dispatch_guard_musetalk_sec + text_len * self._dispatch_guard_musetalk_per_char
+        else:
+            guard = self._dispatch_guard_sec + text_len * self._dispatch_guard_per_char
+
+        if tts_name == "edgetts":
+            guard = guard / self._edge_rate_factor(str(endpoint.get("tts_rate") or ""))
+        return max(0.0, min(90.0, guard))
+
+    def _split_text_for_speech(self, text: str, max_chars: int) -> list[str]:
+        if max_chars <= 0 or len(text) <= max_chars:
+            return [text] if text else []
+
+        punct = set("。！？!?；;，,\n")
+        chunks: list[str] = []
+        buf: list[str] = []
+        last_break_idx = -1
+        soft_min_chars = max(20, max_chars // 3)
+
+        for ch in text:
+            buf.append(ch)
+            if ch in punct:
+                last_break_idx = len(buf)
+
+            if len(buf) < max_chars:
+                continue
+
+            split_at = last_break_idx if last_break_idx >= soft_min_chars else max_chars
+            chunk = "".join(buf[:split_at]).strip()
+            if chunk:
+                chunks.append(chunk)
+            buf = buf[split_at:]
+            last_break_idx = -1
+            for idx, rem_ch in enumerate(buf, start=1):
+                if rem_ch in punct:
+                    last_break_idx = idx
+
+        tail = "".join(buf).strip()
+        if tail:
+            chunks.append(tail)
+
+        return chunks
+
+    def _build_segmented_task(
+        self,
+        *,
+        task_prefix: str,
+        source: str,
+        text: str,
+        priority: int,
+        interrupt: bool,
+        meta: dict[str, Any] | None = None,
+    ) -> tuple[SpeakTask | None, int, int]:
+        merged_meta = dict(meta or {})
+        normalized = str(text or "").strip()
+        if not normalized:
+            return None, 0, 0
+
+        source_chars = len(normalized)
+        if source_chars > self._max_text_chars:
+            merged_meta["source_trimmed"] = True
+            normalized = normalized[: self._max_text_chars].rstrip()
+            source_chars = len(normalized)
+
+        segments = self._split_text_for_speech(normalized, self._segment_max_chars)
+        if not segments:
+            return None, 0, source_chars
+
+        segment_total = len(segments)
+        merged_meta.update(
+            {
+                "source_chars": source_chars,
+                "segment_total": segment_total,
+                "segment_index": 1,
+                "segment_group_id": f"{source}_{uuid.uuid4().hex[:10]}",
+            }
+        )
+        if segment_total > 1:
+            merged_meta["pending_segments"] = segments[1:]
+
+        task = SpeakTask(
+            task_id=f"{task_prefix}_{uuid.uuid4().hex[:12]}",
+            source=source,
+            text=segments[0],
             priority=max(0, min(100, int(priority))),
             interrupt=interrupt,
+            meta=merged_meta,
         )
+        return task, segment_total, source_chars
+
+    def _enqueue_text_task(
+        self,
+        *,
+        task_prefix: str,
+        source: str,
+        text: str,
+        priority: int,
+        interrupt: bool,
+        meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        task, segment_total, source_chars = self._build_segmented_task(
+            task_prefix=task_prefix,
+            source=source,
+            text=text,
+            priority=priority,
+            interrupt=interrupt,
+            meta=meta,
+        )
+        if not task:
+            return {"task_id": "", "segment_count": 0, "char_count": 0}
+
         self._append_task(task)
-        return task.task_id
+        return {
+            "task_id": task.task_id,
+            "segment_count": segment_total,
+            "char_count": source_chars,
+            "segment_max_chars": self._segment_max_chars,
+            "text_trimmed": bool(task.meta.get("source_trimmed")),
+        }
+
+    def _task_prefix_for_source(self, source: str) -> str:
+        mapping = {"reply": "speak", "manual": "manual", "playlist": "playlist"}
+        return mapping.get(source, "task")
+
+    def _schedule_followup_segment(self, task: SpeakTask) -> None:
+        pending_raw = task.meta.get("pending_segments")
+        if not isinstance(pending_raw, list) or not pending_raw:
+            return
+
+        next_text = ""
+        while pending_raw:
+            next_text = str(pending_raw.pop(0) or "").strip()
+            if next_text:
+                break
+        if not next_text:
+            task.meta["pending_segments"] = pending_raw
+            return
+
+        next_meta = dict(task.meta)
+        next_meta["pending_segments"] = pending_raw
+        next_meta["segment_index"] = int(next_meta.get("segment_index") or 1) + 1
+        next_meta.pop("retries", None)
+
+        next_task = SpeakTask(
+            task_id=f"{self._task_prefix_for_source(task.source)}_{uuid.uuid4().hex[:12]}",
+            source=task.source,
+            text=next_text,
+            priority=task.priority,
+            interrupt=False,
+            meta=next_meta,
+        )
+        self._append_task(next_task)
 
     def _append_task(self, task: SpeakTask) -> None:
         # 控制队列上限，避免上游异常导致内存膨胀。
@@ -225,6 +481,9 @@ class SpeakerDispatcher:
         cmdline = live.get("cmdline") or []
         transport = settings.default_transport
         listen_port = settings.default_listen_port
+        model_name = "wav2lip"
+        tts_name = ""
+        tts_rate = ""
 
         for i, token in enumerate(cmdline):
             token_str = str(token)
@@ -235,6 +494,14 @@ class SpeakerDispatcher:
                     listen_port = int(cmdline[i + 1])
                 except Exception:
                     listen_port = settings.default_listen_port
+            elif token_str == "--model" and i + 1 < len(cmdline):
+                model_name = str(cmdline[i + 1])
+            elif token_str == "--tts" and i + 1 < len(cmdline):
+                tts_name = str(cmdline[i + 1])
+            elif token_str.startswith("--TTS_RATE="):
+                tts_rate = token_str.split("=", 1)[1].strip()
+            elif token_str == "--TTS_RATE" and i + 1 < len(cmdline):
+                tts_rate = str(cmdline[i + 1])
 
         if transport == "webrtc":
             # webrtc sessionid 由 /offer 动态生成，当前控制层没有会话映射，先不自动注入。
@@ -243,6 +510,9 @@ class SpeakerDispatcher:
                 "reason": "webrtc 模式 sessionid 动态，当前版本暂不支持自动播报，请使用 virtualcam。",
                 "transport": transport,
                 "listen_port": listen_port,
+                "model": model_name,
+                "tts": tts_name,
+                "tts_rate": tts_rate,
             }
 
         return {
@@ -252,12 +522,16 @@ class SpeakerDispatcher:
             "listen_port": listen_port,
             "base_url": f"http://127.0.0.1:{listen_port}",
             "session_id": 0,
+            "model": model_name,
+            "tts": tts_name,
+            "tts_rate": tts_rate,
         }
 
     def _pick_next_task(self, endpoint: dict[str, Any]) -> SpeakTask | None:
         """按优先级挑选下一条可执行任务。"""
 
         speaking = self._is_speaking(endpoint)
+        now = time.time()
 
         # 先从队列拿回复/手工任务：如果正在说话，仅允许 interrupt 任务抢占。
         with self._lock:
@@ -268,13 +542,46 @@ class SpeakerDispatcher:
                             selected = task
                             del self._queue[idx]
                             return selected
+                    # For segmented long-form speech, preload follow-up chunks while speaking
+                    # so the next chunk can start without an obvious silence gap.
+                    if self._allow_prefetch_while_speaking(endpoint) and now >= self._next_dispatch_ts:
+                        for idx, task in enumerate(self._queue):
+                            if task.interrupt:
+                                continue
+                            if self._is_followup_segment(task):
+                                selected = task
+                                del self._queue[idx]
+                                return selected
                 else:
+                    if now < self._next_dispatch_ts:
+                        for idx, task in enumerate(self._queue):
+                            if task.interrupt:
+                                selected = task
+                                del self._queue[idx]
+                                return selected
+                        return None
                     return self._queue.pop(0)
 
         # 队列为空时才尝试轮播，且仅在空闲时播报。
         if speaking:
             return None
         return self._build_playlist_task()
+
+    def _allow_prefetch_while_speaking(self, endpoint: dict[str, Any]) -> bool:
+        mode = self._prefetch_while_speaking_mode
+        if mode in {"1", "true", "yes", "on"}:
+            return True
+        if mode in {"0", "false", "no", "off"}:
+            return False
+        # Auto mode: enable for wav2lip/ultralight, disable for musetalk.
+        model_name = str(endpoint.get("model") or "").strip().lower()
+        return model_name != "musetalk"
+
+    def _is_followup_segment(self, task: SpeakTask) -> bool:
+        try:
+            return int(task.meta.get("segment_index") or 1) > 1
+        except Exception:
+            return False
 
     def _build_playlist_task(self) -> SpeakTask | None:
         """从启用轮播计划中生成一条脚本播报任务。"""
@@ -337,9 +644,8 @@ class SpeakerDispatcher:
         if not text:
             return None
 
-        self._playlist_last_emit_ts[playlist_id] = now
-        return SpeakTask(
-            task_id=f"playlist_{uuid.uuid4().hex[:12]}",
+        task, _, _ = self._build_segmented_task(
+            task_prefix="playlist",
             source="playlist",
             text=text,
             priority=10,
@@ -351,6 +657,11 @@ class SpeakerDispatcher:
                 "mode": mode,
             },
         )
+        if not task:
+            return None
+
+        self._playlist_last_emit_ts[playlist_id] = now
+        return task
 
     def _choose_playlist_item(
         self,
@@ -373,11 +684,20 @@ class SpeakerDispatcher:
         self._send_text(endpoint, task.text, task.interrupt)
         self._last_dispatch_at = now_ts()
         self._last_error = None
-        self._last_event = f"已下发任务 {task.task_id} ({task.source}, p{task.priority})"
+        segment_index = int(task.meta.get("segment_index") or 1)
+        segment_total = int(task.meta.get("segment_total") or 1)
+        self._last_event = (
+            f"已下发任务 {task.task_id} ({task.source}, p{task.priority}, part {segment_index}/{segment_total})"
+        )
+        self._schedule_followup_segment(task)
+        if not task.interrupt:
+            guard = self._compute_dispatch_guard(task, endpoint)
+            with self._lock:
+                self._next_dispatch_ts = max(self._next_dispatch_ts, time.time() + guard)
 
         if task.source == "reply":
             reply_id = str(task.meta.get("reply_id") or "")
-            if reply_id:
+            if reply_id and segment_index >= segment_total:
                 execute(
                     "UPDATE replies SET status = 'sent_to_live' WHERE id = ?",
                     (reply_id,),

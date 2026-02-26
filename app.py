@@ -43,6 +43,7 @@ import random
 import shutil
 import asyncio
 import torch
+import os
 from typing import Dict
 from logger import logger
 import gc
@@ -64,6 +65,16 @@ def randN(N)->int:
     min = pow(10, N - 1)
     max = pow(10, N)
     return random.randint(min, max - 1)
+
+
+def _parse_rate_percent(rate_text: str):
+    text = str(rate_text or "").strip()
+    if not text.endswith("%"):
+        return None
+    try:
+        return float(text[:-1].strip())
+    except Exception:
+        return None
 
 def build_nerfreal(sessionid:int)->BaseReal:
     opt.sessionid=sessionid
@@ -141,16 +152,34 @@ async def offer(request):
         ),
     )
 
+def _resolve_sessionid(sessionid_raw):
+    """Resolve incoming session id, with virtualcam-friendly fallback to 0."""
+    try:
+        sessionid = int(sessionid_raw)
+    except Exception:
+        sessionid = sessionid_raw
+
+    if sessionid in nerfreals:
+        return sessionid
+    if 0 in nerfreals:
+        return 0
+    raise KeyError(f"sessionid not found: {sessionid_raw}")
+
 async def human(request):
     try:
         params = await request.json()
 
-        sessionid = params.get('sessionid',0)
+        sessionid = _resolve_sessionid(params.get('sessionid', 0))
         if params.get('interrupt'):
             nerfreals[sessionid].flush_talk()
 
         if params['type']=='echo':
-            nerfreals[sessionid].put_msg_txt(params['text'])
+            text = str(params.get('text', '') or '')
+            text_preview = text.replace("\r", " ").replace("\n", " ")
+            if len(text_preview) > 100:
+                text_preview = text_preview[:100] + "..."
+            logger.info("human echo recv chars=%d preview=%s", len(text), text_preview)
+            nerfreals[sessionid].put_msg_txt(text)
         elif params['type']=='chat':
             asyncio.get_event_loop().run_in_executor(None, llm_response, params['text'],nerfreals[sessionid])                         
             #nerfreals[sessionid].put_msg_txt(res)
@@ -174,7 +203,7 @@ async def interrupt_talk(request):
     try:
         params = await request.json()
 
-        sessionid = params.get('sessionid',0)
+        sessionid = _resolve_sessionid(params.get('sessionid', 0))
         nerfreals[sessionid].flush_talk()
         
         return web.Response(
@@ -195,7 +224,7 @@ async def interrupt_talk(request):
 async def humanaudio(request):
     try:
         form= await request.post()
-        sessionid = int(form.get('sessionid',0))
+        sessionid = _resolve_sessionid(form.get('sessionid', 0))
         fileobj = form["file"]
         filename=fileobj.filename
         filebytes=fileobj.file.read()
@@ -220,7 +249,7 @@ async def set_audiotype(request):
     try:
         params = await request.json()
 
-        sessionid = params.get('sessionid',0)    
+        sessionid = _resolve_sessionid(params.get('sessionid', 0))
         nerfreals[sessionid].set_custom_state(params['audiotype'],params['reinit'])
 
         return web.Response(
@@ -242,7 +271,7 @@ async def record(request):
     try:
         params = await request.json()
 
-        sessionid = params.get('sessionid',0)
+        sessionid = _resolve_sessionid(params.get('sessionid', 0))
         if params['type']=='start_record':
             # nerfreals[sessionid].put_msg_txt(params['text'])
             nerfreals[sessionid].start_recording()
@@ -264,15 +293,22 @@ async def record(request):
         )
 
 async def is_speaking(request):
-    params = await request.json()
-
-    sessionid = params.get('sessionid',0)
-    return web.Response(
-        content_type="application/json",
-        text=json.dumps(
-            {"code": 0, "data": nerfreals[sessionid].is_speaking()}
-        ),
-    )
+    try:
+        params = await request.json()
+        sessionid = _resolve_sessionid(params.get('sessionid', 0))
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps(
+                {"code": 0, "data": nerfreals[sessionid].is_speaking()}
+            ),
+        )
+    except Exception as e:
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps(
+                {"code": -1, "msg": str(e), "data": False}
+            ),
+        )
 
 
 async def on_shutdown(app):
@@ -330,14 +366,15 @@ if __name__ == '__main__':
     #musetalk opt
     parser.add_argument('--avatar_id', type=str, default='avator_1', help="define which avatar in data/avatars")
     #parser.add_argument('--bbox_shift', type=int, default=5)
-    parser.add_argument('--batch_size', type=int, default=16, help="infer batch")
+    parser.add_argument('--batch_size', type=int, default=4, help="infer batch")
 
     parser.add_argument('--customvideo_config', type=str, default='', help="custom action json")
 
-    parser.add_argument('--tts', type=str, default='edgetts', help="tts service type") #xtts gpt-sovits cosyvoice fishtts tencent doubao indextts2 azuretts
+    parser.add_argument('--tts', type=str, default='edgetts', help="tts service type") #xtts gpt-sovits cosyvoice fishtts tencent doubao indextts2 azuretts elevenlabs
     parser.add_argument('--REF_FILE', type=str, default="zh-CN-YunxiaNeural",help="参考文件名或语音模型ID，默认值为 edgetts的语音模型ID zh-CN-YunxiaNeural, 若--tts指定为azuretts, 可以使用Azure语音模型ID, 如zh-CN-XiaoxiaoMultilingualNeural")
     parser.add_argument('--REF_TEXT', type=str, default=None)
     parser.add_argument('--TTS_SERVER', type=str, default='http://127.0.0.1:9880') # http://localhost:9000
+    parser.add_argument('--TTS_RATE', type=str, default="+0%", help="TTS 语速，edgetts 典型值: -25%% / +0%% / +25%%")
     # parser.add_argument('--CHARACTER', type=str, default='test')
     # parser.add_argument('--EMOTION', type=str, default='default')
 
@@ -356,6 +393,74 @@ if __name__ == '__main__':
     if opt.customvideo_config!='':
         with open(opt.customvideo_config,'r') as file:
             opt.customopt = json.load(file)
+
+    if opt.model == 'musetalk' and torch.cuda.is_available():
+        try:
+            gpu = torch.cuda.get_device_properties(0)
+            total_mb = int(gpu.total_memory // (1024 * 1024))
+            force_large_batch = (
+                os.getenv("MUSETALK_ALLOW_BATCH_GT1", "0").strip().lower() in {"1", "true", "yes"}
+                or os.getenv("MUSETALK_ALLOW_LARGE_BATCH", "0").strip().lower() in {"1", "true", "yes"}
+            )
+            if total_mb <= 9000 and opt.batch_size > 1 and not force_large_batch:
+                logger.warning(
+                    "GPU %s has %d MiB VRAM; musetalk batch_size=%d may cause heavy lag. Auto-adjust to 1.",
+                    gpu.name,
+                    total_mb,
+                    opt.batch_size,
+                )
+                opt.batch_size = 1
+            elif total_mb <= 9000 and opt.batch_size > 1 and force_large_batch:
+                logger.warning(
+                    "MUSETALK_ALLOW_BATCH_GT1/MUSETALK_ALLOW_LARGE_BATCH enabled, keep batch_size=%d on %s (%d MiB).",
+                    opt.batch_size,
+                    gpu.name,
+                    total_mb,
+                )
+        except Exception as e:
+            logger.warning(f"failed to inspect CUDA device for batch tuning: {e}")
+
+    if opt.model == 'musetalk':
+        allow_high_fps = os.getenv("MUSETALK_ALLOW_HIGH_FPS", "0").strip().lower() in {"1", "true", "yes"}
+        target_fps_raw = os.getenv("MUSETALK_TARGET_FPS", "25").strip()
+        try:
+            target_fps = int(target_fps_raw)
+        except ValueError:
+            target_fps = 25
+        target_fps = max(20, min(50, target_fps))
+        if opt.fps > target_fps and not allow_high_fps:
+            logger.warning(
+                "musetalk fps=%d is too aggressive for realtime on most 8GB GPUs; auto-adjust to %d. "
+                "Set MUSETALK_ALLOW_HIGH_FPS=1 to keep original fps.",
+                opt.fps,
+                target_fps,
+            )
+            opt.fps = target_fps
+
+        # Keep temporal window close to the original (50 fps, l/m/r=10/8/10).
+        if opt.fps <= 30 and (opt.l, opt.m, opt.r) == (10, 8, 10):
+            scaled_l = max(4, int(round(10 * opt.fps / 50.0)))
+            scaled_m = max(3, int(round(8 * opt.fps / 50.0)))
+            scaled_r = max(4, int(round(10 * opt.fps / 50.0)))
+            logger.warning(
+                "musetalk l/m/r auto-scale from 10/8/10 to %d/%d/%d for fps=%d.",
+                scaled_l,
+                scaled_m,
+                scaled_r,
+                opt.fps,
+            )
+            opt.l, opt.m, opt.r = scaled_l, scaled_m, scaled_r
+
+    if opt.model == 'musetalk' and str(opt.tts).lower() == 'edgetts':
+        allow_negative_rate = os.getenv("MUSETALK_ALLOW_NEGATIVE_TTS_RATE", "0").strip().lower() in {"1", "true", "yes"}
+        tts_rate_percent = _parse_rate_percent(opt.TTS_RATE)
+        if tts_rate_percent is not None and tts_rate_percent < 0 and not allow_negative_rate:
+            logger.warning(
+                "musetalk + edgetts with negative TTS_RATE=%s may cause long-audio backlog; auto-adjust to +0%%. "
+                "Set MUSETALK_ALLOW_NEGATIVE_TTS_RATE=1 to keep original rate.",
+                opt.TTS_RATE,
+            )
+            opt.TTS_RATE = "+0%"
 
     # if opt.model == 'ernerf':       
     #     from nerfreal import NeRFReal,load_model,load_avatar
@@ -444,5 +549,3 @@ if __name__ == '__main__':
     # print('start websocket server')
     # server = pywsgi.WSGIServer(('0.0.0.0', 8000), app, handler_class=WebSocketHandler)
     # server.serve_forever()
-    
-    

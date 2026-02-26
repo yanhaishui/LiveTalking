@@ -52,6 +52,25 @@ def load_model():
     # load model weights
     vae, unet, pe = load_all_model()
     device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()) else "cpu"))
+    if device.type == "cuda":
+        # Prefer fast SDPA kernels by default; allow forcing math-only via env for stability.
+        sdpa_mode = os.getenv("MUSETALK_SDPA_MODE", "auto").strip().lower()
+        try:
+            if sdpa_mode in {"math", "safe"}:
+                torch.backends.cuda.enable_cudnn_sdp(False)
+                torch.backends.cuda.enable_flash_sdp(False)
+                torch.backends.cuda.enable_mem_efficient_sdp(False)
+                torch.backends.cuda.enable_math_sdp(True)
+                logger.info("SDPA backend configured: math-only (cudnn/flash/mem-efficient disabled)")
+            else:
+                torch.backends.cuda.enable_math_sdp(True)
+                torch.backends.cuda.enable_mem_efficient_sdp(True)
+                torch.backends.cuda.enable_flash_sdp(True)
+                # cuDNN SDPA plan search is unstable on some GPU/driver combos.
+                torch.backends.cuda.enable_cudnn_sdp(False)
+                logger.info("SDPA backend configured: auto-fast (flash/mem-efficient enabled, cudnn disabled)")
+        except Exception as e:
+            logger.warning(f"failed to configure SDPA backend, fallback to defaults: {e}")
     timesteps = torch.tensor([0], device=device)
     pe = pe.half().to(device)
     vae.vae = vae.vae.half().to(device)
@@ -79,7 +98,11 @@ def load_avatar(avatar_id):
     #     "bbox_shift":self.bbox_shift   
     # }
 
-    input_latent_list_cycle = torch.load(latents_out_path)  #,weights_only=True
+    try:
+        input_latent_list_cycle = torch.load(latents_out_path, weights_only=True)
+    except TypeError:
+        # Backward compatibility for older torch without weights_only.
+        input_latent_list_cycle = torch.load(latents_out_path)
     with open(coords_path, 'rb') as f:
         coord_list_cycle = pickle.load(f)
     input_img_list = glob.glob(os.path.join(full_imgs_path, '*.[jpJP][pnPN]*[gG]'))
@@ -106,9 +129,30 @@ def warm_up(batch_size,model):
     audio_feature_batch = audio_feature_batch.to(device=unet.device, dtype=unet.model.dtype)
     audio_feature_batch = pe(audio_feature_batch)
     latent_batch = latent_batch.to(dtype=unet.model.dtype)
-    pred_latents = unet.model(latent_batch,
-                              timesteps,
-                              encoder_hidden_states=audio_feature_batch).sample
+    try:
+        pred_latents = unet.model(
+            latent_batch,
+            timesteps,
+            encoder_hidden_states=audio_feature_batch,
+        ).sample
+    except RuntimeError as e:
+        err = str(e)
+        if "No execution plans support the graph" in err or "No available kernel" in err:
+            logger.warning("warmup SDPA fast kernel failed; fallback to math-only and retry once.")
+            try:
+                torch.backends.cuda.enable_cudnn_sdp(False)
+                torch.backends.cuda.enable_flash_sdp(False)
+                torch.backends.cuda.enable_mem_efficient_sdp(False)
+                torch.backends.cuda.enable_math_sdp(True)
+            except Exception:
+                pass
+            pred_latents = unet.model(
+                latent_batch,
+                timesteps,
+                encoder_hidden_states=audio_feature_batch,
+            ).sample
+        else:
+            raise
     vae.decode_latents(pred_latents)
 
 def read_imgs(img_list):
@@ -128,9 +172,32 @@ def __mirror_index(size, index):
     else:
         return size - res - 1 
 
+def _push_realtime_audio_frames(realtime_audio_queue, audio_frames):
+    if realtime_audio_queue is None:
+        return
+    for audio_frame in audio_frames:
+        pushed = False
+        for _ in range(2):
+            try:
+                realtime_audio_queue.put_nowait(audio_frame)
+                pushed = True
+                break
+            except queue.Full:
+                try:
+                    realtime_audio_queue.get_nowait()
+                except queue.Empty:
+                    break
+                except Exception:
+                    break
+            except Exception:
+                break
+        if not pushed:
+            # Drop the newest frame in extreme overload.
+            continue
+
 @torch.no_grad()
 def inference(quit_event,batch_size,input_latent_list_cycle,audio_feat_queue,audio_out_queue,res_frame_queue,
-              vae, unet, pe,timesteps): #vae, unet, pe,timesteps
+              vae, unet, pe,timesteps,realtime_audio_queue=None): #vae, unet, pe,timesteps
     
     # vae, unet, pe = load_diffusion_model()
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -157,6 +224,7 @@ def inference(quit_event,batch_size,input_latent_list_cycle,audio_feat_queue,aud
             audio_frames.append((frame,type,eventpoint))
             if type==0:
                 is_all_silence=False
+        _push_realtime_audio_frames(realtime_audio_queue, audio_frames)
         if is_all_silence:
             for i in range(batch_size):
                 res_frame_queue.put((None,__mirror_index(length,index),audio_frames[i*2:i*2+2]))
@@ -181,9 +249,30 @@ def inference(quit_event,batch_size,input_latent_list_cycle,audio_feat_queue,aud
             # print('prepare time:',time.perf_counter()-t)
             # t=time.perf_counter()
 
-            pred_latents = unet.model(latent_batch, 
-                                        timesteps, 
-                                        encoder_hidden_states=audio_feature_batch).sample
+            try:
+                pred_latents = unet.model(
+                    latent_batch,
+                    timesteps,
+                    encoder_hidden_states=audio_feature_batch,
+                ).sample
+            except RuntimeError as e:
+                err = str(e)
+                if "No execution plans support the graph" in err or "No available kernel" in err:
+                    logger.warning("SDPA fast kernel failed; fallback to math-only and retry once.")
+                    try:
+                        torch.backends.cuda.enable_cudnn_sdp(False)
+                        torch.backends.cuda.enable_flash_sdp(False)
+                        torch.backends.cuda.enable_mem_efficient_sdp(False)
+                        torch.backends.cuda.enable_math_sdp(True)
+                    except Exception:
+                        pass
+                    pred_latents = unet.model(
+                        latent_batch,
+                        timesteps,
+                        encoder_hidden_states=audio_feature_batch,
+                    ).sample
+                else:
+                    raise
             # print('unet time:',time.perf_counter()-t)
             # t=time.perf_counter()
             recon = vae.decode_latents(pred_latents)
@@ -197,8 +286,19 @@ def inference(quit_event,batch_size,input_latent_list_cycle,audio_feat_queue,aud
             counttime += (time.perf_counter() - t)
             count += batch_size
             #_totalframe += 1
-            if count>=100:
-                logger.info(f"------actual avg infer fps:{count/counttime:.4f}")
+            if count>=40:
+                avg_fps = count / counttime
+                if torch.cuda.is_available() and str(unet.device).startswith("cuda"):
+                    alloc_mb = torch.cuda.memory_allocated(unet.device) / 1024 / 1024
+                    reserved_mb = torch.cuda.memory_reserved(unet.device) / 1024 / 1024
+                    logger.info(
+                        "------actual avg infer fps:%.4f | cuda alloc %.1f MiB, reserved %.1f MiB",
+                        avg_fps,
+                        alloc_mb,
+                        reserved_mb,
+                    )
+                else:
+                    logger.info(f"------actual avg infer fps:{avg_fps:.4f}")
                 count=0
                 counttime=0
             for i,res_frame in enumerate(recon):
@@ -228,6 +328,23 @@ class MuseReal(BaseReal):
 
         self.asr = MuseASR(opt,self,self.audio_processor)
         self.asr.warm_up()
+        self._last_asr_err_log_ts = 0.0
+        self._asr_err_count = 0
+        self._last_backpressure_log_ts = 0.0
+        pacing_mode = os.getenv("LT_MUSETALK_ENABLE_PACING", "auto").strip().lower()
+        if pacing_mode in {"1", "true", "yes", "on"}:
+            self._enable_pacing = True
+        elif pacing_mode in {"0", "false", "no", "off"}:
+            self._enable_pacing = False
+        else:
+            # Auto mode: enable by default for stability on consumer GPUs.
+            self._enable_pacing = True
+        self.realtime_audio_queue = Queue(maxsize=max(self.fps * 2, 100))
+        logger.info(
+            "musetalk realtime-audio bridge enabled, qmax=%d, pacing=%s",
+            self.realtime_audio_queue.maxsize,
+            self._enable_pacing,
+        )
         
         self.render_event = mp.Event()
 
@@ -291,7 +408,7 @@ class MuseReal(BaseReal):
         infer_quit_event = Event()
         infer_thread = Thread(target=inference, args=(infer_quit_event,self.batch_size,self.input_latent_list_cycle,
                                            self.asr.feat_queue,self.asr.output_queue,self.res_frame_queue,
-                                           self.vae, self.unet, self.pe,self.timesteps)) #mp.Process
+                                           self.vae, self.unet, self.pe,self.timesteps,self.realtime_audio_queue)) #mp.Process
         infer_thread.start()
         
         process_quit_event = Event()
@@ -302,12 +419,55 @@ class MuseReal(BaseReal):
         count=0
         totaltime=0
         _starttime=time.perf_counter()
+        target_step_sec = (self.batch_size * 2) / float(self.fps)
         #_totalframe=0
         while not quit_event.is_set(): #todo
             # update texture every frame
             # audio stream thread...
-            t = time.perf_counter()
-            self.asr.run_step()
+            step_t = time.perf_counter()
+            try:
+                self.asr.run_step()
+            except Exception:
+                self._asr_err_count += 1
+                now = time.time()
+                if now - self._last_asr_err_log_ts >= 2:
+                    logger.exception(
+                        "asr.run_step failed; continue render loop (err_count=%d).",
+                        self._asr_err_count,
+                    )
+                    self._last_asr_err_log_ts = now
+                time.sleep(min(target_step_sec, 0.05))
+                continue
+            step_elapsed = time.perf_counter() - step_t
+            if step_elapsed < target_step_sec:
+                time.sleep(target_step_sec - step_elapsed)
+
+            if self._enable_pacing:
+                # If feature queue is frequently full, inference is behind.
+                # Add a small adaptive pause to reduce producer pressure.
+                extra_sleep = 0.0
+                feat_backlog = 0
+                feat_qmax = max(1, int(getattr(self.asr, "feat_queue_maxsize", 2)))
+                try:
+                    feat_backlog = self.asr.feat_queue.qsize()
+                except Exception:
+                    feat_backlog = 0
+                backlog_ratio = float(feat_backlog) / float(feat_qmax)
+                if backlog_ratio >= 0.5:
+                    # Increase producer sleep as backlog grows.
+                    extra_sleep = target_step_sec * min(1.2, max(0.2, backlog_ratio))
+                if extra_sleep > 0:
+                    now = time.time()
+                    if now - self._last_backpressure_log_ts >= 2:
+                        logger.warning(
+                            "musetalk backpressure: feat_q=%d/%d, ratio=%.2f, add %.3fs pacing sleep.",
+                            feat_backlog,
+                            feat_qmax,
+                            backlog_ratio,
+                            extra_sleep,
+                        )
+                        self._last_backpressure_log_ts = now
+                    time.sleep(extra_sleep)
             #self.test_step(loop,audio_track,video_track)
             # totaltime += (time.perf_counter() - t)
             # count += self.opt.batch_size
